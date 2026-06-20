@@ -2992,15 +2992,6 @@ export default function PersonalLedger() {
     borderColor: currentTheme.rule
   };
 
-  // --- Loader Screen ---
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-[#E7DCC2] text-[#1E2A44] font-mono text-sm">
-        Loading FinSense AI Ledger...
-      </div>
-    );
-  }
-
   // --- Auth Screen Overlay ---
   if (!session) {
     return (
