@@ -3409,8 +3409,7 @@ export default function PersonalLedger() {
       {/* Main Content */}
       <main className="flex-1 p-5 md:p-8 flex flex-col justify-between bg-[var(--card)] min-w-0">
         
-        <div style={{ display: (analysisType === 'roommates' && (roomMembershipStatus === 'none' || roomMembershipStatus === 'pending')) ? 'none' : 'block' }}>
-          {/* Header & Mode Switcher */}
+        {/* Header & Mode Switcher */}
           <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 mb-6 border-b gap-4" style={{ borderColor: 'var(--rule)' }}>
             <div>
               <div className="flex items-center gap-2">
@@ -3453,6 +3452,8 @@ export default function PersonalLedger() {
               </div>
             )}
           </div>
+
+          <div style={{ display: (analysisType === 'roommates' && (roomMembershipStatus === 'none' || roomMembershipStatus === 'pending')) ? 'none' : 'block' }}>
 
           {/* ============================================================== */}
           {/* TAB 1: DASHBOARD OVERVIEW */}
