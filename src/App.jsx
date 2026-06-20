@@ -1260,7 +1260,7 @@ export default function PersonalLedger() {
 
   // Auto-upgrade missing config
   useEffect(() => {
-    if (!session || !currentRoomId || !transactions) return;
+    if (!session || !currentRoomId || !transactions || loading) return;
     
     const configExists = transactions.some(t => 
       t.is_shared && 
@@ -1268,7 +1268,7 @@ export default function PersonalLedger() {
       t.merchant === 'AdminConfig'
     );
 
-    if (!configExists && transactions.length > 0) {
+    if (!configExists) {
       const initAdminConfig = async () => {
         const { data: existing } = await supabase
           .from('transactions')
@@ -1317,7 +1317,7 @@ export default function PersonalLedger() {
       
       initAdminConfig();
     }
-  }, [currentRoomId, transactions, session]);
+  }, [currentRoomId, transactions, session, loading]);
 
   // --- Transactions Logging ---
   const addTransaction = async (e) => {
