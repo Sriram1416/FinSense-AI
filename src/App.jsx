@@ -474,6 +474,12 @@ export default function PersonalLedger() {
   const [voiceRecording, setVoiceRecording] = useState(false);
   const [voiceText, setVoiceText] = useState('');
   const [voiceResult, setVoiceResult] = useState(null);
+  const [voiceModal, setVoiceModal] = useState(false);      // fullscreen voice overlay
+  const [voiceListening, setVoiceListening] = useState(false); // actively listening
+  const [voiceTranscript, setVoiceTranscript] = useState(''); // live transcript
+  const [voiceStatus, setVoiceStatus] = useState('idle');   // idle | listening | thinking | done | error
+  const [voiceBotMsg, setVoiceBotMsg] = useState('');        // what the bot says
+  const voiceRecognitionRef = useRef(null);
 
   // --- AI Coach Chat States ---
   const [chatMessages, setChatMessages] = useState([
@@ -2306,54 +2312,197 @@ export default function PersonalLedger() {
     }
   };
 
-  const triggerVoiceRecording = () => {
-    if (voiceRecording) {
-      setVoiceRecording(false);
-      const command = "spent four hundred and fifty rupees on Zomato food delivery split with flatmates";
-      setVoiceText(command);
-      showToast('success', 'Voice captured.');
-      setVoiceResult({
-        date: isoDate(new Date()),
-        merchant: 'Zomato Food Delivery',
-        amount: 450,
-        category: 'Food',
-        isShared: true,
-        summary: "Spent ₹450 on Food at Zomato (Split equally)"
-      });
+  // ─── Voice Bot: TTS helper ─────────────────────────────────────────────────
+  const speak = (text) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'en-IN';
+    utter.rate = 1.05;
+    utter.pitch = 1.0;
+    window.speechSynthesis.speak(utter);
+  };
+
+  // ─── Voice Bot: NLP parser ─────────────────────────────────────────────────
+  const parseVoiceCommand = (text) => {
+    const t = text.toLowerCase();
+
+    // --- Amount extraction ---
+    // Matches: "500", "five hundred", "1500 rupees", "₹450"
+    const wordNums = {
+      zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,
+      ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,
+      seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,
+      sixty:60,seventy:70,eighty:80,ninety:90,hundred:100,thousand:1000,lakh:100000
+    };
+    let amount = 0;
+    const numMatch = t.match(/(\d[\d,.]*)/);
+    if (numMatch) {
+      amount = parseFloat(numMatch[1].replace(/,/g, ''));
     } else {
-      setVoiceText('');
-      setVoiceResult(null);
-      setVoiceRecording(true);
-      setTimeout(() => {
-        setVoiceRecording(false);
-        triggerVoiceRecording();
-      }, 3000);
+      // word-based
+      const words = t.split(/\s+/);
+      let cur = 0, total = 0;
+      words.forEach(w => {
+        const n = wordNums[w];
+        if (n !== undefined) {
+          if (n === 1000 || n === 100000) { total += (cur || 1) * n; cur = 0; }
+          else if (n === 100) { cur = (cur || 1) * 100; }
+          else { cur += n; }
+        }
+      });
+      amount = total + cur;
     }
+
+    // --- Category detection ---
+    const catMap = [
+      { keys: ['food','zomato','swiggy','restaurant','pizza','biryani','lunch','dinner','breakfast','chai','coffee','hotel'], cat: 'Food' },
+      { keys: ['rent','flat rent','house rent','owner'], cat: 'Rent' },
+      { keys: ['uber','ola','auto','bus','metro','petrol','fuel','cab','travel','train','flight'], cat: 'Transport' },
+      { keys: ['groceries','grocery','vegetables','fruits','milk','provisions','supermarket','market'], cat: 'Groceries' },
+      { keys: ['electricity','wifi','internet','excitel','airtel','jio','bsnl','bill','mobile','recharge','gas','water'], cat: 'Bills' },
+      { keys: ['amazon','flipkart','myntra','shopping','clothes','shirt','shoes','dress','buy'], cat: 'Shopping' },
+      { keys: ['medicine','doctor','pharmacy','hospital','apollo','health','medical'], cat: 'Health' },
+      { keys: ['movie','netflix','prime','hotstar','entertainment','game','gaming','party'], cat: 'Entertainment' },
+    ];
+    let category = 'Other';
+    for (const { keys, cat } of catMap) {
+      if (keys.some(k => t.includes(k))) { category = cat; break; }
+    }
+
+    // --- Merchant extraction ---
+    // Look for known brand names, or text after "at", "on", "for", "from"
+    const brands = ['zomato','swiggy','uber','ola','amazon','flipkart','myntra','netflix','airtel','jio','excitel','bsnl','apollo','decathlon','dominos','kfc','mcdonalds'];
+    let merchant = 'Unknown';
+    for (const b of brands) {
+      if (t.includes(b)) { merchant = b.charAt(0).toUpperCase() + b.slice(1); break; }
+    }
+    if (merchant === 'Unknown') {
+      const afterKeywords = t.match(/(?:at|on|for|from|to)\s+([a-z][a-z\s]{1,25})/);
+      if (afterKeywords) merchant = afterKeywords[1].trim().replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    // --- Shared detection ---
+    const isShared = /split|shared|roommate|flatmate|together|common|all of us|everyone/.test(t);
+
+    return { amount, category, merchant, isShared };
+  };
+
+  // ─── Voice Bot: Start listening ────────────────────────────────────────────
+  const startVoiceBot = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceBotMsg('Voice not supported in this browser. Please use Chrome or Edge.');
+      setVoiceStatus('error');
+      speak('Voice input is not supported in this browser. Please use Chrome or Edge.');
+      return;
+    }
+
+    setVoiceModal(true);
+    setVoiceStatus('listening');
+    setVoiceTranscript('');
+    setVoiceResult(null);
+    setVoiceBotMsg('');
+    speak('Ready! Tell me what you spent. For example — spent 500 on Zomato, split with roommates.');
+
+    const recognition = new SpeechRecognition();
+    voiceRecognitionRef.current = recognition;
+    recognition.lang = 'en-IN';
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      setVoiceListening(true);
+      setVoiceStatus('listening');
+    };
+
+    recognition.onresult = (event) => {
+      let interim = '';
+      let final = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) final += t;
+        else interim += t;
+      }
+      setVoiceTranscript(final || interim);
+      if (final) {
+        setVoiceStatus('thinking');
+        setVoiceListening(false);
+        const parsed = parseVoiceCommand(final);
+        setVoiceResult({ ...parsed, date: isoDate(new Date()), raw: final });
+
+        const reply = parsed.amount > 0
+          ? `Got it! ${fmt(parsed.amount)} at ${parsed.merchant}, category ${parsed.category}${parsed.isShared ? ', split with roommates' : ', personal'}. Tap Confirm to log.`
+          : `I heard: "${final}". But I could not detect an amount. Please try again.`;
+        setVoiceBotMsg(reply);
+        speak(reply);
+        setVoiceStatus(parsed.amount > 0 ? 'done' : 'error');
+      }
+    };
+
+    recognition.onerror = (e) => {
+      setVoiceListening(false);
+      setVoiceStatus('error');
+      const msg = e.error === 'no-speech' ? 'No speech detected. Tap the mic and try again.' : `Error: ${e.error}. Please try again.`;
+      setVoiceBotMsg(msg);
+      speak(msg);
+    };
+
+    recognition.onend = () => {
+      setVoiceListening(false);
+    };
+
+    recognition.start();
+  };
+
+  const stopVoiceBot = () => {
+    if (voiceRecognitionRef.current) {
+      voiceRecognitionRef.current.stop();
+      voiceRecognitionRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+    setVoiceListening(false);
+    setVoiceStatus('idle');
+  };
+
+  const closeVoiceModal = () => {
+    stopVoiceBot();
+    setVoiceModal(false);
+    setVoiceTranscript('');
+    setVoiceResult(null);
+    setVoiceBotMsg('');
+    setVoiceStatus('idle');
+  };
+
+  const triggerVoiceRecording = () => {
+    // Legacy: now just opens the voice modal
+    startVoiceBot();
   };
 
   const acceptVoiceTransaction = async () => {
     if (!voiceResult || !session) return;
+    if (!voiceResult.amount || voiceResult.amount <= 0) {
+      showToast('error', 'Could not detect amount. Please try again.');
+      return;
+    }
     const newTx = {
       user_id: session.user.id,
       room_id: voiceResult.isShared ? currentRoomId : null,
       category: voiceResult.category,
       amount: voiceResult.amount,
       merchant: voiceResult.merchant,
-      note: 'Voice command transcription entry [source:voice]',
-      is_shared: voiceResult.isShared,
-      logged_by: currentUser?.name || 'Roommate',
+      note: `Voice: "${voiceResult.raw || ''}" [source:voice]`,
+      is_shared: !!(voiceResult.isShared && currentRoomId),
+      logged_by: currentUser?.name || 'Me',
       date: voiceResult.date
     };
-
     try {
       const { error } = await supabase.from('transactions').insert(newTx);
-      if (error) {
-        console.error('acceptVoiceTransaction Supabase insert error details:', error);
-        throw error;
-      }
-      showToast('success', 'Logged transaction via voice entry command!');
-      setVoiceText('');
-      setVoiceResult(null);
+      if (error) throw error;
+      speak(`Logged! ${fmt(voiceResult.amount)} at ${voiceResult.merchant} saved successfully.`);
+      showToast('success', `🎙️ Voice logged: ${fmt(voiceResult.amount)} at ${voiceResult.merchant}`);
+      closeVoiceModal();
       await fetchTransactions(session.user.id, currentRoomId);
     } catch (e) {
       showToast('error', 'Error logging voice command.');
@@ -5678,30 +5827,25 @@ export default function PersonalLedger() {
                   <h3 className="font-bold text-xs uppercase tracking-wider text-slate-900 border-b pb-1.5" style={{ borderColor: 'var(--rule)' }}>
                     🎙️ Voice Command Entry
                   </h3>
-                  
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={triggerVoiceRecording}
-                      className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-all border ${voiceRecording ? 'bg-red-600 text-white animate-pulse border-red-700' : 'bg-slate-900/5 text-slate-600 hover:bg-slate-900/10'}`}
-                      style={{ borderColor: !voiceRecording ? 'var(--rule)' : '' }}
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    Tap the mic and say what you spent — FinSense hears you, parses amount, merchant &amp; category, and logs it instantly.
+                  </p>
+                  <div className="flex flex-col items-center gap-3 py-3">
+                    <button
+                      onClick={startVoiceBot}
+                      className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-600 to-indigo-700 text-white flex items-center justify-center shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all"
                     >
-                      <Icons.Microphone className="w-4 h-4" />
+                      <Icons.Microphone className="w-7 h-7" />
                     </button>
-                    
-                    <div className="min-w-0 flex-1 flex flex-col justify-center">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase block">Record intent Command</span>
-                      <span className="text-[9px] text-slate-400 truncate">
-                        {voiceRecording ? `Listening ${currentUser?.name?.split(' ')[0] || ''}...` : voiceText || 'Click microphone to dictate spent'}
-                      </span>
-                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tap to Speak</span>
                   </div>
-
-                  {voiceResult && (
-                    <div className="bg-slate-900/5 border p-3 rounded text-[11px] space-y-1.5" style={{ borderColor: 'var(--rule)' }}>
-                      <p className="font-semibold text-slate-700">Heuristics Parse: "{voiceResult.summary}"</p>
-                      <button onClick={acceptVoiceTransaction} className="w-full py-1 bg-[var(--ink)] text-[var(--card)] rounded text-[9px] font-bold">Approve & Log entry</button>
-                    </div>
-                  )}
+                  <div className="bg-slate-900/5 rounded p-2.5 text-[10px] text-slate-600 space-y-1">
+                    <p className="font-bold text-slate-700 mb-1">💬 Example commands:</p>
+                    <p>"Spent <strong>500</strong> on <strong>Zomato</strong>"</p>
+                    <p>"Paid <strong>1200</strong> for electricity <strong>split with roommates</strong>"</p>
+                    <p>"<strong>250</strong> Uber cab personal"</p>
+                    <p>"Bought groceries for <strong>800 shared</strong>"</p>
+                  </div>
                 </div>
 
               </div>
@@ -5828,6 +5972,134 @@ export default function PersonalLedger() {
       </main>
 
       </div> {/* Closing Main Inner Flex Wrapper */}
+
+      {/* ─── Voice Bot Fullscreen Modal ─────────────────────────────────────── */}
+      {voiceModal && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md" onClick={closeVoiceModal} />
+
+          {/* Modal card */}
+          <div
+            className="relative w-full sm:max-w-sm rounded-t-3xl sm:rounded-2xl overflow-hidden shadow-2xl"
+            style={{ background: 'linear-gradient(145deg,#1e1b4b 0%,#312e81 50%,#1e1b4b 100%)' }}
+          >
+            {/* Close */}
+            <button
+              onClick={closeVoiceModal}
+              className="absolute top-4 right-4 text-indigo-300 hover:text-white text-xl font-bold z-10 w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 transition"
+            >✕</button>
+
+            <div className="p-6 pt-8 flex flex-col items-center gap-5 text-center">
+
+              {/* Title */}
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-indigo-300 mb-1">FinSense Voice Bot</p>
+                <h2 className="text-lg font-bold text-white">
+                  {voiceStatus === 'idle' && 'Ready to listen'}
+                  {voiceStatus === 'listening' && '🎙️ Listening...'}
+                  {voiceStatus === 'thinking' && '🤔 Parsing...'}
+                  {voiceStatus === 'done' && '✅ Got it!'}
+                  {voiceStatus === 'error' && '❌ Try again'}
+                </h2>
+              </div>
+
+              {/* Animated mic ring */}
+              <div className="relative flex items-center justify-center">
+                {voiceListening && (
+                  <>
+                    <div className="absolute w-28 h-28 rounded-full bg-violet-500/20 animate-ping" />
+                    <div className="absolute w-24 h-24 rounded-full bg-violet-500/30 animate-pulse" />
+                  </>
+                )}
+                <button
+                  onClick={voiceStatus === 'listening' ? stopVoiceBot : startVoiceBot}
+                  className={`relative z-10 w-20 h-20 rounded-full flex items-center justify-center text-white shadow-xl transition-all ${
+                    voiceListening
+                      ? 'bg-red-500 hover:bg-red-600 scale-110'
+                      : voiceStatus === 'done'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-violet-600 hover:bg-violet-700'
+                  }`}
+                >
+                  <Icons.Microphone className="w-8 h-8" />
+                </button>
+              </div>
+
+              {/* Live transcript */}
+              <div className="w-full min-h-[48px] bg-white/10 rounded-xl p-3 text-sm text-indigo-100 font-medium text-center leading-relaxed">
+                {voiceTranscript
+                  ? `"${voiceTranscript}"`
+                  : voiceStatus === 'listening'
+                  ? <span className="text-indigo-300 text-xs animate-pulse">Say something like "spent 500 on Zomato split with roommates"</span>
+                  : <span className="text-indigo-400 text-xs">Tap mic to start speaking</span>
+                }
+              </div>
+
+              {/* Bot message */}
+              {voiceBotMsg && (
+                <div className={`w-full rounded-xl p-3 text-xs leading-relaxed font-medium text-left ${
+                  voiceStatus === 'done' ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30'
+                  : voiceStatus === 'error' ? 'bg-red-500/20 text-red-200 border border-red-500/30'
+                  : 'bg-white/10 text-indigo-200'
+                }`}>
+                  🤖 {voiceBotMsg}
+                </div>
+              )}
+
+              {/* Parsed result preview */}
+              {voiceResult && voiceResult.amount > 0 && (
+                <div className="w-full bg-white/10 rounded-xl p-3 text-left space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-indigo-300">Amount</span>
+                    <span className="font-bold text-white text-sm">{fmt(voiceResult.amount)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-indigo-300">Merchant</span>
+                    <span className="font-bold text-white">{voiceResult.merchant}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-indigo-300">Category</span>
+                    <span className="font-bold text-white">{voiceResult.category}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-indigo-300">Split type</span>
+                    <span className={`font-bold ${voiceResult.isShared ? 'text-emerald-400' : 'text-slate-300'}`}>
+                      {voiceResult.isShared ? '👥 Shared' : '👤 Personal'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="w-full flex flex-col gap-2 pb-2">
+                {voiceStatus === 'done' && voiceResult?.amount > 0 && (
+                  <button
+                    onClick={acceptVoiceTransaction}
+                    className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-white font-bold rounded-xl text-sm transition-all shadow-lg"
+                  >
+                    ✅ Confirm & Log Transaction
+                  </button>
+                )}
+                {(voiceStatus === 'done' || voiceStatus === 'error') && (
+                  <button
+                    onClick={startVoiceBot}
+                    className="w-full py-2.5 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl text-sm transition"
+                  >
+                    🔄 Try Again
+                  </button>
+                )}
+                <button
+                  onClick={closeVoiceModal}
+                  className="w-full py-2 text-indigo-400 hover:text-white font-medium text-xs transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Roommate email invitation popup modal */}
       {isAuthOpen && (
