@@ -5081,35 +5081,6 @@ export default function PersonalLedger() {
                                             </button>
                                           </div>
                                         </div>
-
-                                        <div className="mt-1 pt-2 border-t border-dashed border-slate-200 text-[10px] text-slate-600">
-                                          {(() => {
-                                            const sc = getSplitCount(tx);
-                                            const allM = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
-                                            const isPartial = sc < allM.length;
-                                            return (
-                                              <>
-                                                <div className={`flex justify-between font-bold mb-1 p-1.5 rounded ${
-                                                  isPartial ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100/50 text-slate-700'
-                                                }`}>
-                                                  <span>
-                                                    {isPartial ? '🏠 Partial split:' : 'Split count:'} {sc} of {allM.length} people
-                                                    {isPartial && <span className="ml-1 text-[8px] bg-amber-200 text-amber-900 px-1 rounded">Some away</span>}
-                                                  </span>
-                                                  <span className="text-emerald-700">₹{Math.round(tx.amount / sc)} / head</span>
-                                                </div>
-                                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[9px] mt-1 bg-slate-900/5 p-1.5 rounded">
-                                                  {allM.map((name, i) => (
-                                                    <div key={i} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
-                                                      <span className="text-slate-500 truncate">{name === tx.logged_by ? `${name} (Payer)` : name}:</span>
-                                                      <span className="font-bold text-slate-800">₹{Math.round(tx.amount / sc)}</span>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              </>
-                                            );
-                                          })()}
-                                        </div>
                                       </div>
                                     ))}
                                   </div>
@@ -5495,8 +5466,8 @@ export default function PersonalLedger() {
                                       </div>
                                     </div>
 
-                                    {/* Bottom Row: Roommate Splits Details (only visible in roommates analysis mode) */}
-                                    {analysisType === 'roommates' && tx.is_shared && (
+                                    {/* Bottom Row: Roommate Splits Details (only visible in roommates analysis mode and not for direct settlements) */}
+                                    {analysisType === 'roommates' && tx.is_shared && !tx.merchant.startsWith('Settle:') && (
                                       <div className="mt-1 pt-2 border-t border-dashed border-slate-200 text-[10px] text-slate-600">
                                         {(() => {
                                           const sc = getSplitCount(tx);
@@ -6524,4 +6495,3 @@ export default function PersonalLedger() {
     </div>
   );
 }
-
