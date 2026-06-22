@@ -2171,51 +2171,165 @@ export default function PersonalLedger() {
   }, [personalTransactions, curMonthStr, salary, subscriptions]);
 
   const askAI = (queryText) => {
-    const q = queryText.toLowerCase();
-    let reply = "";
+    if (!queryText || !queryText.trim()) return;
+    const q = queryText.toLowerCase().trim();
+    let reply = '';
 
-    if (q.includes('leak') || q.includes('waste') || q.includes('where did my money go')) {
-      if (leakageItems.length === 0 && subscriptions.length === 0) {
-        reply = "Great news! I scanned your recent ledger entries and couldn't find any critical leakage patterns. Keep adding daily logs to stay sharp.";
+    // --- Today's budget ---
+    if (q.includes('today') && (q.includes('budget') || q.includes('how much') || q.includes('left') || q.includes('spend'))) {
+      const todayPersonal = personalTransactions.filter(t => t.date === todayStr).reduce((s, t) => s + t.amount, 0);
+      const dailyAllowance = salary / 30;
+      const left = dailyAllowance - todayPersonal;
+      reply = left >= 0
+        ? `Today's budget: ${fmt(dailyAllowance)} daily allowance. You've spent ${fmt(todayPersonal)} so far. You still have ${fmt(left)} left today! 🟢`
+        : `⚠️ You've already exceeded today's budget! Spent ${fmt(todayPersonal)} against a ${fmt(dailyAllowance)} daily allowance. That's ${fmt(-left)} over budget.`;
+
+    // --- Weekly summary ---
+    } else if (q.includes('week') || q.includes('this week')) {
+      const weekly = totals.week;
+      const weeklyAllowance = (salary / 30) * 7;
+      reply = `This week's spend: ${fmt(weekly)}.\nWeekly allowance: ${fmt(weeklyAllowance)}.\n${
+        weekly > weeklyAllowance ? `⚠️ You're ${fmt(weekly - weeklyAllowance)} over pace this week!` : `✅ You're ${fmt(weeklyAllowance - weekly)} under budget — great week!`
+      }\nTop categories this week: ${
+        (() => {
+          const wStart = (() => { const d = new Date(); d.setDate(d.getDate() - d.getDay()); return isoDate(d); })();
+          const cats = {};
+          personalTransactions.filter(t => t.date >= wStart).forEach(t => { cats[t.category] = (cats[t.category] || 0) + t.amount; });
+          return Object.entries(cats).sort((a,b) => b[1]-a[1]).slice(0,3).map(([c,v]) => `${c} ${fmt(v)}`).join(', ') || 'None logged yet';
+        })()
+      }`;
+
+    // --- Monthly summary ---
+    } else if (q.includes('month') || q.includes('monthly')) {
+      const pct = salary > 0 ? ((totals.month / salary) * 100).toFixed(0) : 0;
+      reply = `Monthly Summary:\n• Salary: ${fmt(salary)}\n• Spent (personal): ${fmt(totals.month)}\n• Remaining: ${fmt(remainingSalary)}\n• Burn rate: ${pct}% of salary used\n• Health Score: ${healthScore}/100\n${
+        Number(pct) > 80 ? '⚠️ High burn rate — cut discretionary spend immediately.' : '✅ You are within healthy spending limits this month.'
+      }`;
+
+    // --- Category breakdown ---
+    } else if (q.includes('categ') || q.includes('breakdown') || q.includes('which category') || q.includes('where did i spend')) {
+      if (categoryBreakdown.length === 0) {
+        reply = 'No personal transactions logged yet this month.';
       } else {
-        reply = `I identified bachelor savings opportunities:\n`;
-        leakageItems.slice(0, 2).forEach(item => {
-          reply += `• Small Leak: Spent ${fmt(item.monthlyCost)} monthly on ${item.merchant} (${item.category}). Extrapolates to ${fmt(item.yearlyCost)} annually. If redirected to mutual funds, this could be worth ${fmt(item.projectedWealth)} in 5 years.\n`;
-        });
-        subscriptions.filter(s => s.isLowUsage).forEach(sub => {
-          reply += `• Subscription leak: ${sub.name} costing ${fmt(sub.amount)} with low usage (${sub.usage} times). Consider canceling.\n`;
+        reply = `Your spending breakdown this month:\n`;
+        categoryBreakdown.slice(0, 6).forEach(c => {
+          const bar = '█'.repeat(Math.round(c.pct / 10)).padEnd(10, '░');
+          reply += `• ${c.category.padEnd(14)} ${bar} ${fmt(c.amount)} (${c.pct}%)\n`;
         });
       }
-    } else if (q.includes('health') || q.includes('score')) {
-      reply = `Your Bachelor Health Score is ${healthScore}/100. Let's break it down:\n• Personal burn rate: ${fmt(totalMonthlySpend)} spent of ${fmt(salary)} salary.\n• Recommendation: Reduce food delivery and retail shopping to push your score above 80.`;
-    } else if (q.includes('risk') || q.includes('safety')) {
-      reply = `Your Risk Level: ${riskStatus.label}.\n${riskStatus.desc}\nYour personal commitments are ${fmt(totals.month * 0.25)} and liquidity is ${fmt(remainingSalary)}. Increasing emergency cash is our main safety toggle.`;
-    } else if (q.includes('survival') || q.includes('how long') || q.includes('last this month')) {
-      if (survivalData.isOverbudget) {
-        reply = `⚠️ Survival Warning: Based on your current daily pace of ${fmt(survivalData.burnRatePerDay)}, you are projected to run out of salary on Day ${survivalData.runoutDay} (${survivalData.totalDays - survivalData.runoutDay} days early!). Your projected monthly spending is ${fmt(survivalData.projectedTotalSpend)} against ${fmt(salary)} salary. Freeze discretionary spending immediately.`;
-      } else {
-        reply = `You are on pace to survive comfortably this month! Your daily burn rate is ${fmt(survivalData.burnRatePerDay)}, leaving you with a projected surplus of ${fmt(salary - survivalData.projectedTotalSpend)} at month-end. Keep it up!`;
+
+    // --- Top spends / biggest expenses ---
+    } else if (q.includes('top') || q.includes('biggest') || q.includes('most expensive') || q.includes('highest')) {
+      const top5 = [...personalTransactions].sort((a,b) => b.amount - a.amount).slice(0, 5);
+      if (top5.length === 0) { reply = 'No personal transactions found.'; }
+      else {
+        reply = `Your 5 biggest personal expenses:\n`;
+        top5.forEach((t, i) => { reply += `${i+1}. ${fmt(t.amount)} — ${t.merchant} (${t.category}) on ${t.date}\n`; });
       }
-    } else if (q.includes('split') || q.includes('roommate') || q.includes('owe')) {
+
+    // --- Savings rate ---
+    } else if (q.includes('saving') || q.includes('save')) {
+      const saved = Math.max(0, remainingSalary);
+      const rate = salary > 0 ? ((saved / salary) * 100).toFixed(1) : 0;
+      const annualProjection = saved * 12;
+      reply = `💰 Savings Analysis:\n• Current savings this month: ${fmt(saved)}\n• Savings rate: ${rate}%\n• Annualised: ${fmt(annualProjection)}/year\n${
+        Number(rate) >= 30 ? '🟢 Excellent! You are saving above the recommended 30% threshold.' :
+        Number(rate) >= 15 ? '🟡 Decent. Try to push savings above 30% by reducing food delivery.' :
+        '🔴 Below 15% savings rate — consider cutting subscriptions and dining out.'
+      }`;
+
+    // --- Rent status ---
+    } else if (q.includes('rent')) {
+      if (analysisType === 'roommates' && activeRentAmount > 0) {
+        const perHead = activeRentAmount / (roommates.length + 1);
+        reply = `🏠 Flat Rent Status:\n• Total flat rent: ${fmt(activeRentAmount)}\n• Members: ${roommates.length + 1} people\n• Your share: ${fmt(perHead)}/month\n• Roommates: ${roommates.map(r => r.name).join(', ') || 'None linked yet'}`;
+      } else {
+        reply = `No flat rent configured yet. Switch to Roommates mode and set a rent amount in the dashboard settings to track rent splits.`;
+      }
+
+    // --- Roommate dues / who owes who ---
+    } else if (q.includes('split') || q.includes('roommate') || q.includes('owe') || q.includes('dues') || q.includes('balance')) {
       if (roommateDues.duesList.length === 0) {
-        reply = "All roommates are perfectly squared up! No outstanding dues.";
+        reply = `✅ All roommates are perfectly squared up! No outstanding dues between any members.`;
       } else {
         reply = `Outstanding Roommate Balances:\n`;
-        roommateDues.duesList.forEach(due => {
-          reply += `• ${due.from} owes ${due.to} ${fmt(due.amount)}\n`;
-        });
-        if (currentUser) {
-          reply += `Your net balance is ${fmt(roommateDues.balances[currentUser.name] || 0)}. If positive, you are owed money. If negative, you owe roommates.`;
+        roommateDues.duesList.forEach(due => { reply += `• ${due.from} owes ${due.to} → ${fmt(due.amount)}\n`; });
+        if (currentUser && roommateDues.balances[currentUser.name] !== undefined) {
+          const myBal = roommateDues.balances[currentUser.name];
+          reply += `\nYour balance: ${myBal > 0 ? `+${fmt(myBal)} (you are owed)` : myBal < 0 ? `${fmt(myBal)} (you owe)` : 'Settled ✅'}`;
         }
       }
+
+    // --- Survival / how many days left ---
+    } else if (q.includes('survival') || q.includes('how long') || q.includes('last') || q.includes('run out') || q.includes('days left')) {
+      if (survivalData.isOverbudget) {
+        reply = `⚠️ Survival Warning! At your current burn rate of ${fmt(survivalData.burnRatePerDay)}/day, you'll run out of salary around Day ${survivalData.runoutDay} — that's ${survivalData.totalDays - survivalData.runoutDay} days early!\nProjected total spend: ${fmt(survivalData.projectedTotalSpend)} vs ${fmt(salary)} salary.\n👉 Cut food delivery and entertainment immediately.`;
+      } else {
+        const daysLeft = survivalData.totalDays - new Date().getDate();
+        reply = `✅ You are on a healthy pace this month!\n• Daily burn rate: ${fmt(survivalData.burnRatePerDay)}\n• Days remaining: ${daysLeft}\n• Projected surplus: ${fmt(salary - survivalData.projectedTotalSpend)}\nKeep up the good work!`;
+      }
+
+    // --- Health score ---
+    } else if (q.includes('health') || q.includes('score') || q.includes('grade')) {
+      const grade = healthScore >= 80 ? 'A' : healthScore >= 60 ? 'B' : healthScore >= 40 ? 'C' : 'D';
+      reply = `📊 Financial Health Score: ${healthScore}/100 — Grade ${grade}\n• Burn rate: ${salary > 0 ? ((totals.month/salary)*100).toFixed(0) : 0}% of salary used\n• Risk level: ${riskStatus.label}\n${riskStatus.desc}\n\nTo improve your score:\n• Keep food delivery under ${fmt(salary * 0.08)}/month\n• Maintain 30%+ savings rate\n• Clear any outstanding roommate dues`;
+
+    // --- Risk / safety ---
+    } else if (q.includes('risk') || q.includes('safe') || q.includes('danger')) {
+      reply = `⚡ Risk Level: ${riskStatus.label}\n${riskStatus.desc}\n• Monthly spend: ${fmt(totals.month)} / ${fmt(salary)}\n• Remaining: ${fmt(remainingSalary)}\n${
+        riskStatus.level === 'high' ? '🔴 Immediate action needed: freeze non-essential spending.' :
+        riskStatus.level === 'medium' ? '🟡 Caution: reduce discretionary spend by 20%.' :
+        '🟢 Low risk — keep tracking daily to maintain this.'
+      }`;
+
+    // --- Spending leaks ---
+    } else if (q.includes('leak') || q.includes('waste') || q.includes('where did my money')) {
+      if (leakageItems.length === 0 && subscriptions.filter(s => s.isLowUsage).length === 0) {
+        reply = '✅ No critical leakage patterns detected! Keep logging daily to stay sharp.';
+      } else {
+        reply = `🔍 Bachelor Savings Opportunities:\n`;
+        leakageItems.slice(0, 3).forEach(item => {
+          reply += `• ${item.merchant} (${item.category}): ${fmt(item.monthlyCost)}/month → ${fmt(item.yearlyCost)}/year wasted\n`;
+        });
+        subscriptions.filter(s => s.isLowUsage).slice(0, 2).forEach(sub => {
+          reply += `• Zombie sub: ${sub.name} costs ${fmt(sub.amount)}/month — used only ${sub.usage}x. Cancel it!\n`;
+        });
+      }
+
+    // --- Log expense via chat ---
+    } else if (q.includes('log') || q.includes('add') || (q.includes('spent') && q.match(/\d+/))) {
+      // Try to parse it like a voice command
+      const parsed = parseVoiceCommand(queryText);
+      if (parsed.amount > 0) {
+        setVoiceResult({ ...parsed, date: isoDate(new Date()), raw: queryText });
+        reply = `Got it! I parsed:\n• Amount: ${fmt(parsed.amount)}\n• Merchant: ${parsed.merchant}\n• Category: ${parsed.category}\n• Type: ${parsed.isShared ? '👥 Shared' : '👤 Personal'}\n\nGo to the 🎙️ Voice Bot (Statement tab) to confirm and log this, or add it manually in the dashboard.`;
+      } else {
+        reply = `I couldn't parse an amount from that. Try saying: "spent 500 on Zomato" or use the 🎙️ Voice Bot for hands-free logging.`;
+      }
+
+    // --- Roommate member list ---
+    } else if (q.includes('member') || q.includes('who is in') || q.includes('flatmate') || q.includes('who')) {
+      if (roommates.length === 0) {
+        reply = `Only you (${currentUser?.name}) are currently in the flat. Invite roommates from the Roommates tab.`;
+      } else {
+        reply = `Flat members (${roommates.length + 1} total):\n• ${currentUser?.name} (You — ${roomAdminId === session?.user?.id ? 'Admin' : 'Member'})\n${
+          roommates.map(r => `• ${r.name}`).join('\n')
+        }`;
+      }
+
+    // --- Help / what can you do ---
+    } else if (q.includes('help') || q.includes('what can you') || q.includes('commands')) {
+      reply = `🤖 Here's what you can ask me:\n\n• "Today's budget" — daily spend vs allowance\n• "Weekly summary" — this week's pace\n• "Monthly breakdown" — category-wise splits\n• "Top spends" — biggest expenses\n• "Savings rate" — how much you're saving\n• "Rent status" — flat rent & per-head share\n• "Who owes who" — roommate dues\n• "Survival pace" — will salary last?\n• "Health score" — your financial grade\n• "Spending leaks" — waste detection\n• "log spent 500 on Zomato" — quick parse\n\nOr just tap a chip below! 👇`;
+
+    // --- Default / general ---
     } else {
-      reply = `I've analyzed your financial ledger. Based on your current monthly salary (${fmt(salary)}), you have logged ${fmt(totals.month)} this month, leaving ${fmt(remainingSalary)} remaining. Your current risk level is ${riskStatus.label} and score is ${healthScore}/100. Ask me about "spending leaks", "roommate split check", or "health score" for deep stats!`;
+      reply = `📊 Quick Overview:\n• Salary: ${fmt(salary)} | Spent: ${fmt(totals.month)} | Left: ${fmt(remainingSalary)}\n• Health Score: ${healthScore}/100 | Risk: ${riskStatus.label}\n• Roommate dues: ${roommateDues.duesList.length === 0 ? '✅ All clear' : `${roommateDues.duesList.length} pending`}\n\nAsk me: "spending leaks", "survival pace", "who owes who", "top spends", "help" for more commands!`;
     }
 
     setChatMessages(prev => [
       ...prev,
-      { id: Date.now(), sender: 'user', text: queryText },
-      { id: Date.now() + 1, sender: 'coach', text: reply }
+      { id: Date.now(), sender: 'user', text: queryText, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) },
+      { id: Date.now() + 1, sender: 'coach', text: reply, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) }
     ]);
     setChatInput('');
   };
@@ -5634,42 +5748,120 @@ export default function PersonalLedger() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* Chat Window */}
-              <div className="blur-card rounded p-5 lg:col-span-2 flex flex-col justify-between h-[450px]">
-                <div>
-                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-900 border-b pb-2 mb-3" style={{ borderColor: 'var(--rule)' }}>
-                    💬 AI Bachelor Financial Coach
-                  </h3>
-                  
-                  {/* Messages Feed */}
-                  <div className="h-[310px] overflow-y-auto space-y-3 pr-1 text-xs">
-                    {chatMessages.map(msg => (
-                      <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div 
-                          className={`max-w-[80%] p-3 rounded shadow-sm whitespace-pre-line leading-relaxed ${msg.sender === 'user' ? 'bg-[var(--ink)] text-[var(--card)] rounded-br-none' : 'bg-slate-900/5 text-slate-800 rounded-bl-none border'}`}
-                          style={{ borderColor: msg.sender !== 'user' ? 'var(--rule)' : 'transparent' }}
-                        >
-                          <p className="font-bold text-[9px] uppercase tracking-wider mb-1 opacity-70">
-                            {msg.sender === 'user' ? currentUser?.name : 'AI coach'}
-                          </p>
-                          {msg.text}
-                        </div>
-                      </div>
-                    ))}
-                    <div ref={chatEndRef} />
+              <div className="blur-card rounded p-0 lg:col-span-2 flex flex-col overflow-hidden" style={{ height: '520px' }}>
+                
+                {/* Chat Header */}
+                <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: 'var(--ink)' }}>
+                  <div className="w-8 h-8 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-sm flex-shrink-0">AI</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-bold text-white">FinSense AI Coach</p>
+                    <p className="text-[9px] text-slate-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full inline-block"></span> Online — {roommates.length + 1} member flat
+                    </p>
                   </div>
+                  <button
+                    onClick={() => setChatMessages([{ id: 1, sender: 'coach', text: `Hello ${currentUser?.name?.split(' ')[0] || ''}! I'm your AI Financial Coach. Ask me anything about your spending, roommate splits, savings rate, or type "help" for a full command list!`, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) }])}
+                    className="text-[9px] text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition"
+                  >
+                    Clear
+                  </button>
                 </div>
 
-                {/* Form Chat input */}
-                <div className="flex gap-2 border-t pt-3 mt-3" style={{ borderColor: 'var(--rule)' }}>
+                {/* Quick Suggestion Chips */}
+                <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b" style={{ borderColor: 'var(--rule)' }}>
+                  {[
+                    ["📅 Today's budget", "today's budget"],
+                    ["📊 Monthly summary", "monthly summary"],
+                    ["🔍 Spending leaks", "spending leaks"],
+                    ["💰 Savings rate", "savings rate"],
+                    ["👥 Who owes who", "who owes who"],
+                    ["🏠 Rent status", "rent status"],
+                    ["⚡ Health score", "health score"],
+                    ["📈 Survival pace", "survival pace"],
+                    ["🔝 Top spends", "top spends"],
+                    ["❓ Help", "help"]
+                  ].map(([label, query]) => (
+                    <button
+                      key={query}
+                      onClick={() => askAI(query)}
+                      className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-slate-900 hover:text-white transition-all whitespace-nowrap"
+                      style={{ borderColor: 'var(--rule)', color: 'var(--ink-soft)' }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Messages Feed */}
+                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs">
+                  {chatMessages.map(msg => (
+                    <div key={msg.id} className={`flex gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      {msg.sender === 'coach' && (
+                        <div className="w-6 h-6 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-[9px] flex-shrink-0 mt-0.5">AI</div>
+                      )}
+                      <div className="flex flex-col gap-0.5 max-w-[78%]">
+                        <div
+                          className={`p-3 rounded-2xl shadow-sm whitespace-pre-line leading-relaxed text-[11px] ${
+                            msg.sender === 'user'
+                              ? 'bg-[var(--ink)] text-[var(--card)] rounded-br-none'
+                              : 'bg-slate-100 text-slate-800 rounded-bl-none border'
+                          }`}
+                          style={{ borderColor: msg.sender !== 'user' ? 'var(--rule)' : 'transparent' }}
+                        >
+                          {msg.text}
+                        </div>
+                        {msg.time && (
+                          <span className={`text-[8px] text-slate-400 ${msg.sender === 'user' ? 'text-right' : 'text-left'}`}>{msg.time}</span>
+                        )}
+                      </div>
+                      {msg.sender === 'user' && (
+                        <div className="w-6 h-6 rounded-full bg-[var(--ink)] flex items-center justify-center text-[var(--card)] font-black text-[9px] flex-shrink-0 mt-0.5">
+                          {currentUser?.name?.charAt(0) || 'U'}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Chat input bar */}
+                <div className="px-3 pb-3 pt-2 border-t flex gap-2 items-center" style={{ borderColor: 'var(--rule)' }}>
+                  {/* Voice-to-chat mic */}
+                  <button
+                    onClick={() => {
+                      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                      if (!SpeechRecognition) { showToast('error', 'Voice not supported — use Chrome or Edge'); return; }
+                      const rec = new SpeechRecognition();
+                      rec.lang = 'en-IN';
+                      rec.interimResults = false;
+                      rec.onresult = (e) => {
+                        const transcript = e.results[0][0].transcript;
+                        setChatInput(transcript);
+                        setTimeout(() => askAI(transcript), 200);
+                      };
+                      rec.onerror = () => showToast('error', 'Could not hear you. Try again.');
+                      rec.start();
+                      showToast('success', '🎙️ Listening for your question...');
+                    }}
+                    className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-700 text-white flex items-center justify-center flex-shrink-0 transition shadow-sm"
+                    title="Ask by voice"
+                  >
+                    <Icons.Microphone className="w-3.5 h-3.5" />
+                  </button>
                   <input
                     type="text"
-                    placeholder="Ask about leaks, roommate split check, or survival pace..."
-                    className="flex-1 ledger-input-box"
+                    placeholder="Ask anything... or tap 🎙️ to speak"
+                    className="flex-1 ledger-input-box text-xs"
                     value={chatInput}
                     onChange={e => setChatInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') askAI(chatInput); }}
                   />
-                  <button onClick={() => askAI(chatInput)} className="btn-vintage-ink flex-shrink-0">Send</button>
+                  <button
+                    onClick={() => askAI(chatInput)}
+                    className="btn-vintage-ink flex-shrink-0 px-3 py-1.5 text-xs"
+                  >
+                    Send
+                  </button>
                 </div>
               </div>
 
@@ -5695,10 +5887,26 @@ export default function PersonalLedger() {
                       ))}
                     </div>
                   )}
+
+                  {/* Quick stat cards */}
+                  <div className="mt-4 pt-3 border-t space-y-2" style={{ borderColor: 'var(--rule)' }}>
+                    <p className="text-[9px] uppercase font-bold tracking-wider text-slate-500 mb-2">Quick Stats</p>
+                    {[
+                      { label: 'Health Score', value: `${healthScore}/100`, color: healthScore >= 70 ? 'text-emerald-700' : healthScore >= 50 ? 'text-amber-700' : 'text-red-700' },
+                      { label: 'Monthly Spent', value: fmt(totals.month), color: 'text-slate-800' },
+                      { label: 'Remaining', value: fmt(Math.max(0, remainingSalary)), color: remainingSalary >= 0 ? 'text-emerald-700' : 'text-red-700' },
+                      { label: 'Risk Level', value: riskStatus.label, color: riskStatus.level === 'low' ? 'text-emerald-700' : riskStatus.level === 'medium' ? 'text-amber-700' : 'text-red-700' },
+                    ].map(s => (
+                      <div key={s.label} className="flex justify-between items-center text-[10px]">
+                        <span className="text-slate-500">{s.label}</span>
+                        <span className={`font-bold font-mono ${s.color}`}>{s.value}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="text-[10px] text-slate-500 pt-3 border-t mt-4" style={{ borderColor: 'var(--rule)' }}>
-                  Flags compile automatically based on recurring discretionary spend patterns.
+                  Tap any chip above the chat or speak to ask the AI coach instantly.
                 </div>
               </div>
 
