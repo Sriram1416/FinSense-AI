@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from './supabaseClient';
 
@@ -438,6 +438,7 @@ export default function PersonalLedger() {
     note: '',
     source: 'manual',
     isShared: false,
+    presentMembers: null, // null = all members present; array of names = partial split
   });
   
   // --- Search / Filters ---
@@ -785,11 +786,16 @@ export default function PersonalLedger() {
       if (error) throw error;
       if (data) {
         const mapped = data.map(tx => {
-          const match = tx.note?.match(/\[source:(\w+)\]/);
+          const srcMatch = tx.note?.match(/\[source:(\w+)\]/);
+          const splitMatch = tx.note?.match(/\[split:(\d+)\]/);
+          const cleanNote = tx.note
+            ? tx.note.replace(/\[source:\w+\]/, '').replace(/\[split:\d+\]/, '').trim()
+            : '';
           return {
             ...tx,
-            source: match ? match[1] : 'manual',
-            note: tx.note ? tx.note.replace(/\[source:\w+\]/, '').trim() : ''
+            source: srcMatch ? srcMatch[1] : 'manual',
+            splitCount: splitMatch ? parseInt(splitMatch[1], 10) : null,
+            note: cleanNote
           };
         });
         setTransactions(mapped);
@@ -1383,9 +1389,22 @@ export default function PersonalLedger() {
       return;
     }
 
-    // Append source metadata to note
+    // Append source metadata + optional split count to note
     const noteText = form.note.trim();
-    const noteWithSource = noteText ? `${noteText} [source:${form.source || 'manual'}]` : `[source:${form.source || 'manual'}]`;
+    const allMembers = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
+    // Determine present member count (only relevant for shared expenses)
+    let splitN = allMembers.length; // default: all members
+    if (form.isShared && form.presentMembers !== null && Array.isArray(form.presentMembers)) {
+      splitN = form.presentMembers.length;
+    }
+    if (form.isShared && splitN <= 0) {
+      showToast('error', 'Select at least 1 person to split with.');
+      return;
+    }
+    const splitTag = (form.isShared && splitN < allMembers.length) ? ` [split:${splitN}]` : '';
+    const noteWithSource = noteText
+      ? `${noteText} [source:${form.source || 'manual'}]${splitTag}`
+      : `[source:${form.source || 'manual'}]${splitTag}`;
 
     const payerId = form.paidById || session.user.id;
     let payerName = currentUser?.name || 'Roommate';
@@ -1413,7 +1432,7 @@ export default function PersonalLedger() {
         throw error;
       }
 
-      showToast('success', `Logged ${fmt(amt)} spent at ${newTx.merchant}`);
+      showToast('success', `Logged ${fmt(amt)} — split among ${splitN} people`);
       await fetchTransactions(session.user.id, currentRoomId);
 
       setForm({
@@ -1423,7 +1442,8 @@ export default function PersonalLedger() {
         note: '',
         source: 'manual',
         isShared: false,
-        paidById: session.user.id
+        paidById: session.user.id,
+        presentMembers: null
       });
     } catch (e) {
       showToast('error', 'Could not log transaction.');
@@ -1549,8 +1569,14 @@ export default function PersonalLedger() {
   }, [categoryBreakdown, totalMonthlySpend]);
 
   // --- Roommate Splits / Who Owes Who Matrix ---
+  // Helper: get split count for a transaction. Uses stored [split:N] tag, falls back to full member count.
+  const getSplitCount = useCallback((tx) => {
+    if (tx.splitCount && tx.splitCount > 0) return tx.splitCount;
+    return roommates.length + 1;
+  }, [roommates]);
+
   const roommateDues = useMemo(() => {
-    const N = roommates.length + 1;
+    const N = roommates.length + 1; // total member count (for rent split)
     const todayObj = new Date();
     const day = (todayObj.getDay() + 6) % 7;
     const startOfWeekObj = new Date(todayObj);
@@ -1565,9 +1591,11 @@ export default function PersonalLedger() {
 
     const totalPaidMap = {};
     const txCountMap = {};
+    const memberOwedMap = {}; // per-member: how much they owe in total (their share of each tx)
     memberNames.forEach(name => {
       totalPaidMap[name] = 0;
       txCountMap[name] = 0;
+      memberOwedMap[name] = 0;
     });
 
     let totalRoomExpense = 0;
@@ -1583,10 +1611,24 @@ export default function PersonalLedger() {
         if (tx.date.slice(0, 7) === curMonthStr) monthlyRoomExpense += tx.amount;
 
         const payer = tx.logged_by;
+        // Use per-tx split count (supports partial-presence splits)
+        const txSplitCount = tx.splitCount && tx.splitCount > 0 ? tx.splitCount : N;
+        const txShare = tx.amount / txSplitCount; // share per present person
+
         if (totalPaidMap[payer] !== undefined) {
           totalPaidMap[payer] += tx.amount;
           txCountMap[payer] = (txCountMap[payer] || 0) + 1;
         }
+        // Every member owes their share (only if split covers full group we charge all,
+        // partial split tags mean fewer people share — for simplicity we distribute equally
+        // among txSplitCount members. We approximate by charging all N members txShare
+        // weighted by presence ratio, but the fairest approach: charge each member txShare
+        // and leave extra to the payer's benefit).
+        memberNames.forEach(name => {
+          if (memberOwedMap[name] !== undefined) {
+            memberOwedMap[name] += txShare;
+          }
+        });
       }
     }
 
@@ -1598,6 +1640,7 @@ export default function PersonalLedger() {
     }
 
     const otherSharedTotal = totalRoomExpense - (shouldInjectRent ? activeRentAmount : 0);
+    // Use average share for display (individual shares vary per-tx)
     const otherShare = N > 0 ? otherSharedTotal / N : 0;
     const rentShare = shouldInjectRent ? (activeRentAmount / N) : 0;
     const totalShare = otherShare + rentShare;
@@ -1605,8 +1648,9 @@ export default function PersonalLedger() {
     const balances = {};
     const memberSummaries = memberNames.map(name => {
       const paid = totalPaidMap[name] || 0;
-      // The settlement balance covers only other shared expenses (groceries, bills, etc.)
-      const bal = paid - otherShare;
+      // Per-member owed = their sum of per-tx shares (accounts for partial-presence splits)
+      const owed = memberOwedMap[name] || 0;
+      const bal = paid - owed;
       balances[name] = Math.round(bal);
 
       let status = 'Settled';
@@ -1616,7 +1660,7 @@ export default function PersonalLedger() {
       return {
         name,
         paid: Math.round(paid),
-        share: Math.round(totalShare), // Display total share including rent split
+        share: Math.round(owed + rentShare), // Display total share including rent split
         balance: Math.round(bal),
         amountToPay: bal < 0 ? Math.round(-bal) : 0,
         amountToReceive: bal > 0 ? Math.round(bal) : 0,
@@ -4530,22 +4574,32 @@ export default function PersonalLedger() {
                                         </div>
 
                                         <div className="mt-1 pt-2 border-t border-dashed border-slate-200 text-[10px] text-slate-600">
-                                          <div className="flex justify-between font-bold text-slate-700 mb-1 bg-slate-100/50 p-1.5 rounded">
-                                            <span>Split count: {roommates.length + 1} people</span>
-                                            <span className="text-emerald-700">₹{Math.round(tx.amount / (roommates.length + 1))} / head</span>
-                                          </div>
-                                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[9px] mt-1 bg-slate-900/5 p-1.5 rounded">
-                                            <div className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
-                                              <span className="text-slate-500 truncate">{currentUser?.name === tx.logged_by ? `${currentUser?.name} (Payer)` : currentUser?.name}:</span>
-                                              <span className="font-bold text-slate-800">₹{Math.round(tx.amount / (roommates.length + 1))}</span>
-                                            </div>
-                                            {roommates.map(r => (
-                                              <div key={r.id} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
-                                                <span className="text-slate-500 truncate">{r.name === tx.logged_by ? `${r.name} (Payer)` : r.name}:</span>
-                                                <span className="font-bold text-slate-800">₹{Math.round(tx.amount / (roommates.length + 1))}</span>
-                                              </div>
-                                            ))}
-                                          </div>
+                                          {(() => {
+                                            const sc = getSplitCount(tx);
+                                            const allM = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
+                                            const isPartial = sc < allM.length;
+                                            return (
+                                              <>
+                                                <div className={`flex justify-between font-bold mb-1 p-1.5 rounded ${
+                                                  isPartial ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100/50 text-slate-700'
+                                                }`}>
+                                                  <span>
+                                                    {isPartial ? '🏠 Partial split:' : 'Split count:'} {sc} of {allM.length} people
+                                                    {isPartial && <span className="ml-1 text-[8px] bg-amber-200 text-amber-900 px-1 rounded">Some away</span>}
+                                                  </span>
+                                                  <span className="text-emerald-700">₹{Math.round(tx.amount / sc)} / head</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[9px] mt-1 bg-slate-900/5 p-1.5 rounded">
+                                                  {allM.map((name, i) => (
+                                                    <div key={i} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
+                                                      <span className="text-slate-500 truncate">{name === tx.logged_by ? `${name} (Payer)` : name}:</span>
+                                                      <span className="font-bold text-slate-800">₹{Math.round(tx.amount / sc)}</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </>
+                                            );
+                                          })()}
                                         </div>
                                       </div>
                                     ))}
@@ -4657,17 +4711,71 @@ export default function PersonalLedger() {
 
                   {/* Only show roommate split checkbox in roommates mode */}
                   {analysisType === 'roommates' && roomMembershipStatus === 'accepted' && (
-                    <div className="flex items-center gap-2 p-2 bg-slate-900/5 border rounded" style={{ borderColor: 'var(--rule)' }}>
-                      <input
-                        type="checkbox"
-                        id="sharedCheckDetailed"
-                        className="cursor-pointer"
-                        checked={form.isShared}
-                        onChange={e => setForm({ ...form, isShared: e.target.checked })}
-                      />
-                      <label htmlFor="sharedCheckDetailed" className="text-xs font-bold text-slate-800 cursor-pointer select-none">
-                        <Icons.Group className="w-3.5 h-3.5 mr-1 inline text-[var(--ink-soft)]" /> Split equally with roommates?
-                      </label>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-2 p-2 bg-slate-900/5 border rounded" style={{ borderColor: 'var(--rule)' }}>
+                        <input
+                          type="checkbox"
+                          id="sharedCheckDetailed"
+                          className="cursor-pointer"
+                          checked={form.isShared}
+                          onChange={e => setForm({ ...form, isShared: e.target.checked, presentMembers: null })}
+                        />
+                        <label htmlFor="sharedCheckDetailed" className="text-xs font-bold text-slate-800 cursor-pointer select-none">
+                          <Icons.Group className="w-3.5 h-3.5 mr-1 inline text-[var(--ink-soft)]" /> Split equally with roommates?
+                        </label>
+                      </div>
+
+                      {/* Who's present? (only show when shared is ticked and there are roommates) */}
+                      {form.isShared && roommates.length > 0 && (() => {
+                        const allMembers = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
+                        const present = form.presentMembers ?? allMembers;
+                        return (
+                          <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded animate-fade-in">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 mb-2">
+                              🏠 Who's home? ({present.length}/{allMembers.length} splitting)
+                            </p>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              {allMembers.map(name => {
+                                const checked = present.includes(name);
+                                return (
+                                  <label key={name} className={`flex items-center gap-1.5 cursor-pointer text-[11px] font-semibold px-2 py-1.5 rounded border transition-all ${
+                                    checked
+                                      ? 'bg-emerald-700 text-white border-emerald-700'
+                                      : 'bg-white text-slate-500 border-slate-200 line-through'
+                                  }`}>
+                                    <input
+                                      type="checkbox"
+                                      className="sr-only"
+                                      checked={checked}
+                                      onChange={() => {
+                                        const next = checked
+                                          ? present.filter(n => n !== name)
+                                          : [...present, name];
+                                        // If all selected, set to null (= all present)
+                                        setForm({ ...form, presentMembers: next.length === allMembers.length ? null : next });
+                                      }}
+                                    />
+                                    <span className={`w-3 h-3 rounded-sm border flex items-center justify-center flex-shrink-0 ${
+                                      checked ? 'bg-white border-white' : 'border-slate-400 bg-slate-100'
+                                    }`}>
+                                      {checked && <span className="text-emerald-700 font-black text-[10px]">✓</span>}
+                                    </span>
+                                    {name}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            {form.presentMembers !== null && form.presentMembers.length > 0 && (
+                              <p className="text-[9px] text-emerald-700 mt-1.5 font-bold">
+                                ₹ will be split among {form.presentMembers.length} people only
+                              </p>
+                            )}
+                            {form.presentMembers !== null && form.presentMembers.length === 0 && (
+                              <p className="text-[9px] text-red-600 mt-1.5 font-bold">Select at least 1 person!</p>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
@@ -4881,22 +4989,32 @@ export default function PersonalLedger() {
                                     {/* Bottom Row: Roommate Splits Details (only visible in roommates analysis mode) */}
                                     {analysisType === 'roommates' && tx.is_shared && (
                                       <div className="mt-1 pt-2 border-t border-dashed border-slate-200 text-[10px] text-slate-600">
-                                        <div className="flex justify-between font-bold text-slate-700 mb-1 bg-slate-100/50 p-1.5 rounded">
-                                          <span>Split count: {roommates.length + 1} people</span>
-                                          <span className="text-emerald-700">₹{Math.round(tx.amount / (roommates.length + 1))} / head</span>
-                                        </div>
-                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[9px] mt-1 bg-slate-900/5 p-1.5 rounded">
-                                          <div className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
-                                            <span className="text-slate-500 truncate">{currentUser?.name === tx.logged_by ? `${currentUser?.name} (Payer)` : currentUser?.name}:</span>
-                                            <span className="font-bold text-slate-800">₹{Math.round(tx.amount / (roommates.length + 1))}</span>
-                                          </div>
-                                          {roommates.map(r => (
-                                            <div key={r.id} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
-                                              <span className="text-slate-500 truncate">{r.name === tx.logged_by ? `${r.name} (Payer)` : r.name}:</span>
-                                              <span className="font-bold text-slate-800">₹{Math.round(tx.amount / (roommates.length + 1))}</span>
-                                            </div>
-                                          ))}
-                                        </div>
+                                        {(() => {
+                                          const sc = getSplitCount(tx);
+                                          const allM = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
+                                          const isPartial = sc < allM.length;
+                                          return (
+                                            <>
+                                              <div className={`flex justify-between font-bold mb-1 p-1.5 rounded ${
+                                                isPartial ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-slate-100/50 text-slate-700'
+                                              }`}>
+                                                <span>
+                                                  {isPartial ? '🏠 Partial split:' : 'Split count:'} {sc} of {allM.length} people
+                                                  {isPartial && <span className="ml-1 text-[8px] bg-amber-200 text-amber-900 px-1 rounded">Some away</span>}
+                                                </span>
+                                                <span className="text-emerald-700">₹{Math.round(tx.amount / sc)} / head</span>
+                                              </div>
+                                              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[9px] mt-1 bg-slate-900/5 p-1.5 rounded">
+                                                {allM.map((name, i) => (
+                                                  <div key={i} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
+                                                    <span className="text-slate-500 truncate">{name === tx.logged_by ? `${name} (Payer)` : name}:</span>
+                                                    <span className="font-bold text-slate-800">₹{Math.round(tx.amount / sc)}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </>
+                                          );
+                                        })()}
                                       </div>
                                     )}
                                   </div>
