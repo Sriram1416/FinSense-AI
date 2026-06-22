@@ -380,6 +380,7 @@ export default function PersonalLedger() {
   const [roomLoading, setRoomLoading] = useState(false);
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [pendingInvites, setPendingInvites] = useState([]);
+  const [pendingMembers, setPendingMembers] = useState([]);
 
   // --- Core Financial States ---
   const [salary, setSalary] = useState(50000); 
@@ -630,12 +631,14 @@ export default function PersonalLedger() {
           setRoomMembershipStatus('none');
           setCurrentRoomCode('');
           setPendingInvites([]);
+          setPendingMembers([]);
           await fetchUserPersonalTransactions(authUser.id);
         }
       } catch (e) {
         console.warn('Room membership fetch failed, showing personal ledger only', e);
         setCurrentRoomId(null);
         setRoomMembershipStatus('none');
+        setPendingMembers([]);
         try { await fetchUserPersonalTransactions(authUser.id); } catch (_) {}
       }
     } catch (e) {
@@ -711,6 +714,45 @@ export default function PersonalLedger() {
       setRoommates(roommatesList);
     } else {
       setRoommates([]);
+    }
+
+    // 1b. Fetch Pending roommate join requests
+    try {
+      const { data: pendingMembersData } = await supabase
+        .from('room_members')
+        .select('*')
+        .eq('room_id', roomId)
+        .eq('status', 'pending');
+      
+      if (pendingMembersData && pendingMembersData.length > 0) {
+        const pendingUserIds = pendingMembersData.map(m => m.user_id);
+        const { data: pendingProfiles } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', pendingUserIds);
+        
+        const pendingProfileMap = {};
+        if (pendingProfiles) {
+          pendingProfiles.forEach(p => {
+            pendingProfileMap[p.id] = p;
+          });
+        }
+
+        const pendingList = pendingMembersData.map(m => {
+          const prof = pendingProfileMap[m.user_id];
+          return {
+            id: m.user_id,
+            name: prof?.name || 'Roommate',
+            email: prof?.email || ''
+          };
+        });
+        setPendingMembers(pendingList);
+      } else {
+        setPendingMembers([]);
+      }
+    } catch (e) {
+      console.error("Error fetching pending members:", e);
+      setPendingMembers([]);
     }
 
     // Load flat rent configuration
@@ -912,6 +954,7 @@ export default function PersonalLedger() {
       setCurrentRoomId(null);
       setCurrentRoomCode('');
       setRoommates([]);
+      setPendingMembers([]);
       setTransactions([]);
       showToast('success', 'Left roommate flat.');
       await fetchUserPersonalTransactions(session.user.id);
@@ -5051,6 +5094,52 @@ export default function PersonalLedger() {
                       </div>
                     )}
                   </div>
+
+                  {/* Pending join requests list (only shown to Admin) */}
+                  {roomAdminId === session?.user?.id && pendingMembers.length > 0 && (
+                    <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--rule)' }}>
+                      <h4 className="text-[10px] uppercase font-bold tracking-wider text-[var(--stamp)] mb-2 flex items-center gap-1.5">
+                        <span>📩 Incoming flat join requests:</span>
+                      </h4>
+                      <div className="space-y-2">
+                        {pendingMembers.map(member => (
+                          <div key={member.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-amber-600/5 rounded border border-amber-500/20 text-xs animate-fade-in">
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-800 truncate block">{member.name}</span>
+                              <span className="text-[9px] text-slate-500 block truncate">{member.email}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <button 
+                                onClick={() => handleApproveRoommateRequest(member.id)}
+                                className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded text-[10px] font-bold transition shadow-xs"
+                              >
+                                Approve
+                              </button>
+                              <button 
+                                onClick={async () => {
+                                  if (confirm(`Decline and remove request from ${member.name}?`)) {
+                                    try {
+                                      await supabase
+                                        .from('room_members')
+                                        .delete()
+                                        .match({ room_id: currentRoomId, user_id: member.id });
+                                      showToast('success', 'Join request declined.');
+                                      await fetchRoommatesAndTransactions(session.user.id, currentRoomId);
+                                    } catch (e) {
+                                      showToast('error', 'Error declining request.');
+                                    }
+                                  }
+                                }}
+                                className="px-2.5 py-1 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded text-[10px] font-bold transition"
+                              >
+                                Decline
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Dues Settlement Matrix */}
