@@ -1579,13 +1579,22 @@ export default function PersonalLedger() {
   const sendRoommateChatMessage = async (textVal) => {
     const text = textVal || roommateChatInput;
     if (!session || !currentRoomId || !text || !text.trim()) return;
+
+    // Package message text, local time, and high-precision timestamp as JSON
+    const localTime = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const notePayload = JSON.stringify({
+      text: text.trim(),
+      time: localTime,
+      timestamp: new Date().toISOString()
+    });
+
     const msgTx = {
       user_id: session.user.id,
       room_id: currentRoomId,
       category: 'System',
       amount: 0,
       merchant: 'chat_msg',
-      note: text.trim(),
+      note: notePayload,
       is_shared: true,
       logged_by: currentUser?.name || 'Roommate',
       date: isoDate(new Date())
@@ -1882,14 +1891,39 @@ export default function PersonalLedger() {
   const roommateChatMessages = useMemo(() => {
     return transactions
       .filter(t => t.is_shared && t.category === 'System' && t.merchant === 'chat_msg')
-      .map(t => ({
-        id: t.id,
-        sender: t.logged_by,
-        text: t.note || '',
-        date: t.date,
-        created_at: t.created_at || t.date
-      }))
-      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      .map(t => {
+        let text = t.note || '';
+        let time = '';
+        let sortKey = t.created_at || t.date;
+        
+        try {
+          if (t.note && (t.note.startsWith('{') || t.note.startsWith('['))) {
+            const parsed = JSON.parse(t.note);
+            text = parsed.text || '';
+            time = parsed.time || '';
+            if (parsed.timestamp) {
+              sortKey = parsed.timestamp;
+            }
+          }
+        } catch (e) {
+          // Keep raw text if not valid JSON
+        }
+        
+        if (!time) {
+          // Fallback to local time from date
+          const dateSource = t.created_at || t.date;
+          time = new Date(dateSource).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        return {
+          id: t.id,
+          sender: t.logged_by,
+          text,
+          time,
+          sortKey
+        };
+      })
+      .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
   }, [transactions]);
 
   const healthScore = useMemo(() => {
@@ -6268,7 +6302,7 @@ export default function PersonalLedger() {
                                   <p>{msg.text}</p>
                                 </div>
                                 <span className={`text-[7px] text-slate-500 px-0.5 ${isMe ? 'text-right' : 'text-left'}`}>
-                                  {new Date(msg.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                  {msg.time}
                                 </span>
                               </div>
                               {isMe && (
