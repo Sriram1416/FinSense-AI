@@ -2706,77 +2706,251 @@ export default function PersonalLedger() {
     // Sort by date descending
     filtered.sort((a, b) => b.date.localeCompare(a.date));
 
-    // Construct spreadsheet rows
-    let roll = [];
+    const wb = XLSX.utils.book_new();
+
     if (isPersonal) {
-      roll = filtered.map(t => ({
-        Date: t.date,
-        Day: new Date(t.date).toLocaleDateString('en-IN', { weekday: 'long' }),
-        Category: t.category,
-        Merchant: t.merchant,
-        Note: t.note || '',
-        'Amount (₹)': t.amount,
-        Source: t.source,
-      }));
+      // --- Personal Mode Summary & Analytics Sheet ---
+      const totalPersonal = filtered.reduce((s, t) => s + Number(t.amount), 0);
       
-      const total = filtered.reduce((s, t) => s + Number(t.amount), 0);
-      roll.push({});
-      roll.push({ Date: 'TOTAL', 'Amount (₹)': total });
-    } else {
-      // Roommates Split Mode
-      roll = filtered.map(t => ({
-        Date: t.date,
-        Day: new Date(t.date).toLocaleDateString('en-IN', { weekday: 'long' }),
-        Category: t.category,
-        Merchant: t.merchant,
-        Note: t.note || '',
-        'Paid By': t.logged_by,
-        'Amount (₹)': t.amount,
-        Source: t.source,
-      }));
-
-      const total = filtered.reduce((s, t) => s + Number(t.amount), 0);
-      roll.push({});
-      roll.push({ Date: 'GRAND TOTAL', 'Amount (₹)': total });
-
-      // Calculate total paid by each person
-      const totalsByPerson = {};
-      
-      // Initialize with all roommates + current user
-      const allNames = [currentUser?.name || 'Me', ...roommates.map(r => r.name)];
-      allNames.forEach(name => {
-        totalsByPerson[name] = 0;
+      // Calculate category breakdown
+      const categoryBreakdown = {};
+      filtered.forEach(t => {
+        categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + Number(t.amount);
       });
+
+      const summaryRows = [
+        ["FINSENSE - PERSONAL EXPENSES SUMMARY"],
+        ["Export Date:", new Date().toLocaleDateString('en-IN')],
+        ["Period:", period.toUpperCase()],
+        [],
+        ["1. PERSONAL OVERVIEW"],
+        ["Total Spend", totalPersonal],
+        ["Transactions Count", filtered.length],
+        [],
+        ["2. SPENDING BY CATEGORY"],
+        ["Category", "Amount Spent (₹)", "Percentage (%)"]
+      ];
+
+      Object.entries(categoryBreakdown)
+        .sort((a, b) => b[1] - a[1])
+        .forEach(([cat, amt]) => {
+          const pct = totalPersonal > 0 ? ((amt / totalPersonal) * 100).toFixed(1) + "%" : "0%";
+          summaryRows.push([cat, amt, pct]);
+        });
+
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+      wsSummary['!cols'] = [{ wch: 30 }, { wch: 20 }, { wch: 20 }];
+
+      // --- Personal Mode Detailed Transactions Sheet ---
+      const txRows = [
+        ["Date", "Day", "Category", "Merchant", "Note", "Amount (₹)", "Source"]
+      ];
+      filtered.forEach(t => {
+        txRows.push([
+          t.date,
+          new Date(t.date).toLocaleDateString('en-IN', { weekday: 'long' }),
+          t.category,
+          t.merchant,
+          t.note || '',
+          t.amount,
+          t.source
+        ]);
+      });
+
+      const wsTx = XLSX.utils.aoa_to_sheet(txRows);
+      wsTx['!cols'] = [
+        { wch: 12 }, // Date
+        { wch: 12 }, // Day
+        { wch: 15 }, // Category
+        { wch: 20 }, // Merchant
+        { wch: 25 }, // Note
+        { wch: 15 }, // Amount (₹)
+        { wch: 12 }  // Source
+      ];
+
+      XLSX.utils.book_append_sheet(wb, wsSummary, "Summary & Analytics");
+      XLSX.utils.book_append_sheet(wb, wsTx, "Detailed Transactions");
+
+    } else {
+      // --- Roommates Mode Summary & Balances Sheet ---
+      const N = roommates.length + 1; // total member count
+      const memberNames = [];
+      if (currentUser) memberNames.push(currentUser.name);
+      roommates.forEach(r => memberNames.push(r.name));
+
+      const totalPaidMap = {};
+      const memberOwedMap = {}; // per-member sum of per-tx shares
+      memberNames.forEach(name => {
+        totalPaidMap[name] = 0;
+        memberOwedMap[name] = 0;
+      });
+
+      let totalRoomExpense = 0;
+      filtered.forEach(t => {
+        totalRoomExpense += Number(t.amount);
+        const payer = t.logged_by;
+        const txSplitCount = t.splitCount && t.splitCount > 0 ? t.splitCount : N;
+        const txShare = Number(t.amount) / txSplitCount;
+
+        if (totalPaidMap[payer] !== undefined) {
+          totalPaidMap[payer] += Number(t.amount);
+        }
+        memberNames.forEach(name => {
+          if (memberOwedMap[name] !== undefined) {
+            memberOwedMap[name] += txShare;
+          }
+        });
+      });
+
+      // Handle rent injection (if applicable for month/year/all periods)
+      const appliesToRent = period === 'month' || period === 'year' || period === 'all';
+      const rentInjected = appliesToRent && shouldInjectRent && activeRentAmount > 0;
+      
+      if (rentInjected) {
+        totalRoomExpense += activeRentAmount;
+      }
+
+      const otherSharedTotal = totalRoomExpense - (rentInjected ? activeRentAmount : 0);
+      const rentShare = rentInjected ? (activeRentAmount / N) : 0;
+
+      const balances = {};
+      const memberSummaries = memberNames.map(name => {
+        const paid = totalPaidMap[name] || 0;
+        const owed = memberOwedMap[name] || 0;
+        const bal = paid - owed;
+        balances[name] = Math.round(bal);
+
+        let status = 'Settled';
+        if (bal > 0.5) status = 'Owed';
+        else if (bal < -0.5) status = 'Owes';
+
+        return {
+          name,
+          paid: Math.round(paid),
+          share: Math.round(owed + rentShare),
+          balance: Math.round(bal),
+          status
+        };
+      });
+
+      // Debt settlements simplified path
+      const debtors = [];
+      const creditors = [];
+      Object.entries(balances).forEach(([name, bal]) => {
+        if (bal < -0.5) debtors.push({ name, bal: -bal });
+        if (bal > 0.5) creditors.push({ name, bal });
+      });
+
+      const duesList = [];
+      let dIdx = 0;
+      let cIdx = 0;
+      while (dIdx < debtors.length && cIdx < creditors.length) {
+        const debtor = debtors[dIdx];
+        const creditor = creditors[cIdx];
+        const transfer = Math.min(debtor.bal, creditor.bal);
+        duesList.push({
+          from: debtor.name,
+          to: creditor.name,
+          amount: Math.round(transfer)
+        });
+        debtor.bal -= transfer;
+        creditor.bal -= transfer;
+        if (debtor.bal <= 1) dIdx++;
+        if (creditor.bal <= 1) cIdx++;
+      }
+
+      const summaryRows = [
+        ["FINSENSE - ROOMMATE EXPENSES SUMMARY"],
+        ["Export Date:", new Date().toLocaleDateString('en-IN')],
+        ["Period:", period.toUpperCase()],
+        [],
+        ["1. GROUP OVERVIEW"],
+        ["Total Shared Expense (excluding Rent)", otherSharedTotal],
+        ["Injected Flat Rent", rentInjected ? activeRentAmount : 0],
+        ["GRAND TOTAL (including Rent)", totalRoomExpense],
+        ["Number of Members", N],
+        ["Individual Rent Share", rentInjected ? Math.round(rentShare) : 0],
+        [],
+        ["2. MEMBER BALANCES & STATUS"],
+        ["Name", "Total Paid (₹)", "Fair Share (excl. Rent) (₹)", "Total Share (incl. Rent) (₹)", "Net Balance (excl. Rent) (₹)", "Status"]
+      ];
+
+      memberSummaries.forEach(m => {
+        summaryRows.push([
+          m.name,
+          m.paid,
+          Math.round(memberOwedMap[m.name] || 0),
+          m.share,
+          m.balance,
+          m.status === 'Owed' ? 'Gets Back (Owed)' : m.status === 'Owes' ? 'Must Pay (Owes)' : 'Settled'
+        ]);
+      });
+
+      summaryRows.push([]);
+      summaryRows.push(["3. SUGGESTED SETTLEMENTS (WHO PAYS WHOM)"]);
+      summaryRows.push(["From (Debtor)", "To (Creditor)", "Amount (₹)"]);
+
+      if (duesList.length === 0) {
+        summaryRows.push(["No outstanding dues", "Everyone is settled", 0]);
+      } else {
+        duesList.forEach(due => {
+          summaryRows.push([due.from, due.to, due.amount]);
+        });
+      }
+
+      const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+      wsSummary['!cols'] = [
+        { wch: 30 },
+        { wch: 18 },
+        { wch: 25 },
+        { wch: 25 },
+        { wch: 25 },
+        { wch: 20 }
+      ];
+
+      // --- Roommates Mode Detailed Transactions Sheet ---
+      const txRows = [
+        ["Date", "Day", "Category", "Merchant", "Note", "Paid By", "Split Mode", "Total Amount (₹)", "Your Share (₹)", "Source"]
+      ];
 
       filtered.forEach(t => {
-        const name = t.logged_by;
-        totalsByPerson[name] = (totalsByPerson[name] || 0) + Number(t.amount);
+        const txSplitCount = t.splitCount && t.splitCount > 0 ? t.splitCount : N;
+        const isPartial = t.splitCount && t.splitCount > 0;
+        const splitModeStr = isPartial ? `Split by ${txSplitCount} members` : `Split by all (${N} members)`;
+        const txShare = Number(t.amount) / txSplitCount;
+        
+        txRows.push([
+          t.date,
+          new Date(t.date).toLocaleDateString('en-IN', { weekday: 'long' }),
+          t.category,
+          t.merchant,
+          t.note || '',
+          t.logged_by,
+          splitModeStr,
+          t.amount,
+          Math.round(txShare),
+          t.source
+        ]);
       });
 
-      roll.push({});
-      roll.push({ Date: 'BREAKDOWN BY PERSON:' });
-      
-      Object.entries(totalsByPerson).forEach(([name, amt]) => {
-        roll.push({ Date: name, 'Amount (₹)': amt });
-      });
+      const wsTx = XLSX.utils.aoa_to_sheet(txRows);
+      wsTx['!cols'] = [
+        { wch: 12 }, // Date
+        { wch: 12 }, // Day
+        { wch: 15 }, // Category
+        { wch: 20 }, // Merchant
+        { wch: 25 }, // Note
+        { wch: 15 }, // Paid By
+        { wch: 20 }, // Split Mode
+        { wch: 15 }, // Total Amount
+        { wch: 15 }, // Your Share
+        { wch: 12 }  // Source
+      ];
 
-      const count = allNames.length || 1;
-      const share = total / count;
-      roll.push({});
-      roll.push({ Date: `Individual Share (divided by ${count})`, 'Amount (₹)': share });
+      XLSX.utils.book_append_sheet(wb, wsSummary, "Summary & Balances");
+      XLSX.utils.book_append_sheet(wb, wsTx, "Detailed Transactions");
     }
 
-    const ws = XLSX.utils.json_to_sheet(roll);
-    
-    // Set column widths
-    if (isPersonal) {
-      ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 20 }, { wch: 12 }, { wch: 12 }];
-    } else {
-      ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 20 }, { wch: 15 }, { wch: 12 }, { wch: 12 }];
-    }
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, label.substring(0, 31));
     XLSX.writeFile(wb, `FinSense_${label}.xlsx`);
     showToast('success', `Downloaded: ${filtered.length} entries for ${period}`);
   };
