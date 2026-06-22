@@ -486,6 +486,8 @@ export default function PersonalLedger() {
     { id: 1, sender: 'coach', text: "Hello! I am your AI Bachelor Financial Coach. Ask me about your personal leakages, flat roommate splits, monthly survival pace, or savings forecasts!" }
   ]);
   const [chatInput, setChatInput] = useState('');
+  const [chatSubTab, setChatSubTab] = useState('ai'); // 'ai' | 'roommates'
+  const [roommateChatInput, setRoommateChatInput] = useState('');
   const chatEndRef = useRef(null);
 
   // --- Projection Slider ---
@@ -1574,6 +1576,30 @@ export default function PersonalLedger() {
     }));
   };
 
+  const sendRoommateChatMessage = async (textVal) => {
+    const text = textVal || roommateChatInput;
+    if (!session || !currentRoomId || !text || !text.trim()) return;
+    const msgTx = {
+      user_id: session.user.id,
+      room_id: currentRoomId,
+      category: 'System',
+      amount: 0,
+      merchant: 'chat_msg',
+      note: text.trim(),
+      is_shared: true,
+      logged_by: currentUser?.name || 'Roommate',
+      date: isoDate(new Date())
+    };
+    try {
+      const { error } = await supabase.from('transactions').insert(msgTx);
+      if (error) throw error;
+      setRoommateChatInput('');
+      await fetchTransactions(session.user.id, currentRoomId);
+    } catch (e) {
+      showToast('error', 'Failed to send message.');
+    }
+  };
+
   // --- Dates Variables ---
   const todayStr = isoDate(new Date());
   const curMonthStr = todayStr.slice(0, 7);
@@ -1852,6 +1878,19 @@ export default function PersonalLedger() {
       mostActiveBuyer
     };
   }, [transactions, roommates, currentUser, todayStr, curMonthStr, shouldInjectRent, activeRentAmount, roomAdminName]);
+
+  const roommateChatMessages = useMemo(() => {
+    return transactions
+      .filter(t => t.is_shared && t.category === 'System' && t.merchant === 'chat_msg')
+      .map(t => ({
+        id: t.id,
+        sender: t.logged_by,
+        text: t.note || '',
+        date: t.date,
+        created_at: t.created_at || t.date
+      }))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  }, [transactions]);
 
   const healthScore = useMemo(() => {
     if (salary === 0) return 0;
@@ -6011,119 +6050,282 @@ export default function PersonalLedger() {
               {/* Chat Window */}
               <div className="blur-card rounded p-0 lg:col-span-2 flex flex-col overflow-hidden" style={{ height: '520px' }}>
                 
-                {/* Chat Header */}
-                <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: 'var(--ink)' }}>
-                  <div className="w-8 h-8 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-sm flex-shrink-0">AI</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[11px] font-bold text-white">FinSense AI Coach</p>
-                    <p className="text-[9px] text-slate-400 flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full inline-block"></span> Online — {roommates.length + 1} member flat
-                    </p>
-                  </div>
+                {/* Chat Mode Sub-Tabs */}
+                <div className="flex bg-slate-900/5 border-b" style={{ borderColor: 'var(--rule)' }}>
                   <button
-                    onClick={() => setChatMessages([{ id: 1, sender: 'coach', text: `Hello ${currentUser?.name?.split(' ')[0] || ''}! I'm your AI Financial Coach. Ask me anything about your spending, roommate splits, savings rate, or type "help" for a full command list!`, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) }])}
-                    className="text-[9px] text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition"
+                    onClick={() => setChatSubTab('ai')}
+                    className={`flex-1 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
+                      chatSubTab === 'ai'
+                        ? 'bg-[var(--ink)] text-[var(--card)]'
+                        : 'text-slate-600 hover:bg-slate-200/50'
+                    }`}
                   >
-                    Clear
+                    🤖 AI Financial Coach
+                  </button>
+                  <button
+                    onClick={() => setChatSubTab('roommates')}
+                    className={`flex-1 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
+                      chatSubTab === 'roommates'
+                        ? 'bg-[var(--ink)] text-[var(--card)]'
+                        : 'text-slate-600 hover:bg-slate-200/50'
+                    }`}
+                  >
+                    💬 Roommates Group Chat
                   </button>
                 </div>
 
-                {/* Quick Suggestion Chips */}
-                <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b" style={{ borderColor: 'var(--rule)' }}>
-                  {[
-                    ["📅 Today's budget", "today's budget"],
-                    ["📊 Monthly summary", "monthly summary"],
-                    ["🔍 Spending leaks", "spending leaks"],
-                    ["💰 Savings rate", "savings rate"],
-                    ["👥 Who owes who", "who owes who"],
-                    ["🏠 Rent status", "rent status"],
-                    ["⚡ Health score", "health score"],
-                    ["📈 Survival pace", "survival pace"],
-                    ["🔝 Top spends", "top spends"],
-                    ["❓ Help", "help"]
-                  ].map(([label, query]) => (
-                    <button
-                      key={query}
-                      onClick={() => askAI(query)}
-                      className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-slate-900 hover:text-white transition-all whitespace-nowrap"
-                      style={{ borderColor: 'var(--rule)', color: 'var(--ink-soft)' }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Messages Feed */}
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs">
-                  {chatMessages.map(msg => (
-                    <div key={msg.id} className={`flex gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      {msg.sender === 'coach' && (
-                        <div className="w-6 h-6 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-[9px] flex-shrink-0 mt-0.5">AI</div>
-                      )}
-                      <div className="flex flex-col gap-0.5 max-w-[78%]">
-                        <div
-                          className={`p-3 rounded-2xl shadow-sm whitespace-pre-line leading-relaxed text-[11px] ${
-                            msg.sender === 'user'
-                              ? 'bg-[var(--ink)] text-[var(--card)] rounded-br-none'
-                              : 'bg-slate-100 text-slate-800 rounded-bl-none border'
-                          }`}
-                          style={{ borderColor: msg.sender !== 'user' ? 'var(--rule)' : 'transparent' }}
-                        >
-                          {msg.text}
-                        </div>
-                        {msg.time && (
-                          <span className={`text-[8px] text-slate-400 ${msg.sender === 'user' ? 'text-right' : 'text-left'}`}>{msg.time}</span>
-                        )}
+                {chatSubTab === 'ai' ? (
+                  <>
+                    {/* Chat Header (AI) */}
+                    <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: 'var(--ink)' }}>
+                      <div className="w-8 h-8 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-sm flex-shrink-0">AI</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-bold text-white">FinSense AI Coach</p>
+                        <p className="text-[9px] text-slate-400 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full inline-block animate-pulse"></span> Online — {roommates.length + 1} member flat
+                        </p>
                       </div>
-                      {msg.sender === 'user' && (
-                        <div className="w-6 h-6 rounded-full bg-[var(--ink)] flex items-center justify-center text-[var(--card)] font-black text-[9px] flex-shrink-0 mt-0.5">
-                          {currentUser?.name?.charAt(0) || 'U'}
-                        </div>
-                      )}
+                      <button
+                        onClick={() => setChatMessages([{ id: 1, sender: 'coach', text: `Hello ${currentUser?.name?.split(' ')[0] || ''}! I'm your AI Financial Coach. Ask me anything about your spending, roommate splits, savings rate, or type "help" for a full command list!`, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) }])}
+                        className="text-[9px] text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition"
+                      >
+                        Clear
+                      </button>
                     </div>
-                  ))}
-                  <div ref={chatEndRef} />
-                </div>
 
-                {/* Chat input bar */}
-                <div className="px-3 pb-3 pt-2 border-t flex gap-2 items-center" style={{ borderColor: 'var(--rule)' }}>
-                  {/* Voice-to-chat mic */}
-                  <button
-                    onClick={() => {
-                      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                      if (!SpeechRecognition) { showToast('error', 'Voice not supported — use Chrome or Edge'); return; }
-                      const rec = new SpeechRecognition();
-                      rec.lang = 'en-IN';
-                      rec.interimResults = false;
-                      rec.onresult = (e) => {
-                        const transcript = e.results[0][0].transcript;
-                        setChatInput(transcript);
-                        setTimeout(() => askAI(transcript), 200);
-                      };
-                      rec.onerror = () => showToast('error', 'Could not hear you. Try again.');
-                      rec.start();
-                      showToast('success', '🎙️ Listening for your question...');
-                    }}
-                    className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-700 text-white flex items-center justify-center flex-shrink-0 transition shadow-sm"
-                    title="Ask by voice"
-                  >
-                    <Icons.Microphone className="w-3.5 h-3.5" />
-                  </button>
-                  <input
-                    type="text"
-                    placeholder="Ask anything... or tap 🎙️ to speak"
-                    className="flex-1 ledger-input-box text-xs"
-                    value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') askAI(chatInput); }}
-                  />
-                  <button
-                    onClick={() => askAI(chatInput)}
-                    className="btn-vintage-ink flex-shrink-0 px-3 py-1.5 text-xs"
-                  >
-                    Send
-                  </button>
-                </div>
+                    {/* Quick Suggestion Chips (AI) */}
+                    <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b" style={{ borderColor: 'var(--rule)' }}>
+                      {[
+                        ["📅 Today's budget", "today's budget"],
+                        ["📊 Monthly summary", "monthly summary"],
+                        ["🔍 Spending leaks", "spending leaks"],
+                        ["💰 Savings rate", "savings rate"],
+                        ["👥 Who owes who", "who owes who"],
+                        ["🏠 Rent status", "rent status"],
+                        ["⚡ Health score", "health score"],
+                        ["📈 Survival pace", "survival pace"],
+                        ["🔝 Top spends", "top spends"],
+                        ["❓ Help", "help"]
+                      ].map(([label, query]) => (
+                        <button
+                          key={query}
+                          onClick={() => askAI(query)}
+                          className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-slate-900 hover:text-white transition-all whitespace-nowrap"
+                          style={{ borderColor: 'var(--rule)', color: 'var(--ink-soft)' }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Messages Feed (AI) */}
+                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs">
+                      {chatMessages.map(msg => (
+                        <div key={msg.id} className={`flex gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                          {msg.sender === 'coach' && (
+                            <div className="w-6 h-6 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-[9px] flex-shrink-0 mt-0.5">AI</div>
+                          )}
+                          <div className="flex flex-col gap-0.5 max-w-[78%]">
+                            <div
+                              className={`p-3 rounded-2xl shadow-sm whitespace-pre-line leading-relaxed text-[11px] ${
+                                msg.sender === 'user'
+                                  ? 'bg-[var(--ink)] text-[var(--card)] rounded-br-none'
+                                  : 'bg-slate-100 text-slate-800 rounded-bl-none border'
+                              }`}
+                              style={{ borderColor: msg.sender !== 'user' ? 'var(--rule)' : 'transparent' }}
+                            >
+                              {msg.text}
+                            </div>
+                            {msg.time && (
+                              <span className={`text-[8px] text-slate-400 ${msg.sender === 'user' ? 'text-right' : 'text-left'}`}>{msg.time}</span>
+                            )}
+                          </div>
+                          {msg.sender === 'user' && (
+                            <div className="w-6 h-6 rounded-full bg-[var(--ink)] flex items-center justify-center text-[var(--card)] font-black text-[9px] flex-shrink-0 mt-0.5">
+                              {currentUser?.name?.charAt(0) || 'U'}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <div ref={chatEndRef} />
+                    </div>
+
+                    {/* Chat input bar (AI) */}
+                    <div className="px-3 pb-3 pt-2 border-t flex gap-2 items-center" style={{ borderColor: 'var(--rule)' }}>
+                      <button
+                        onClick={() => {
+                          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                          if (!SpeechRecognition) { showToast('error', 'Voice not supported — use Chrome or Edge'); return; }
+                          const rec = new SpeechRecognition();
+                          rec.lang = 'en-IN';
+                          rec.interimResults = false;
+                          rec.onresult = (e) => {
+                            const transcript = e.results[0][0].transcript;
+                            setChatInput(transcript);
+                            setTimeout(() => askAI(transcript), 200);
+                          };
+                          rec.onerror = () => showToast('error', 'Could not hear you. Try again.');
+                          rec.start();
+                          showToast('success', '🎙️ Listening for your question...');
+                        }}
+                        className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-700 text-white flex items-center justify-center flex-shrink-0 transition shadow-sm"
+                        title="Ask by voice"
+                      >
+                        <Icons.Microphone className="w-3.5 h-3.5" />
+                      </button>
+                      <input
+                        type="text"
+                        placeholder="Ask anything... or tap 🎙️ to speak"
+                        className="flex-1 ledger-input-box text-xs"
+                        value={chatInput}
+                        onChange={e => setChatInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') askAI(chatInput); }}
+                      />
+                      <button
+                        onClick={() => askAI(chatInput)}
+                        className="btn-vintage-ink flex-shrink-0 px-3 py-1.5 text-xs"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Chat Header (Roommates) */}
+                    <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: '#128C7E' }}>
+                      <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-[#128C7E] font-black text-sm flex-shrink-0">💬</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-bold text-white">Flat Roommates Group Chat</p>
+                        <p className="text-[9px] text-teal-100 truncate">
+                          {currentUser?.name?.split(' ')[0] || ''}
+                          {roommates.map(r => `, ${r.name.split(' ')[0]}`).join('')}
+                        </p>
+                      </div>
+                      <span className="text-[8px] px-1.5 py-0.5 rounded bg-teal-850 text-teal-100 font-bold border border-teal-600">
+                        WhatsApp Style
+                      </span>
+                    </div>
+
+                    {/* Quick Suggestion Chips (Roommates) */}
+                    <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b bg-slate-50" style={{ borderColor: 'var(--rule)' }}>
+                      {[
+                        ["💰 Settle up dues!", "Guys, please settle your outstanding dues!"],
+                        ["🏠 Rent reminder", "Friendly reminder: house rent is due soon!"],
+                        ["🔌 WiFi bill paid", "I have paid the WiFi bill, split uploaded!"],
+                        ["🥬 Buying groceries", "Going to buy groceries. Let me know if we need anything!"],
+                        ["🧹 Clean flat!", "Let's clean the flat today, it's a mess!"],
+                        ["🍵 Tea time?", "Anyone up for a tea break?"],
+                        ["🥛 Milk done", "Milk packet has been bought and kept in fridge."]
+                      ].map(([label, msgText]) => (
+                        <button
+                          key={label}
+                          onClick={() => sendRoommateChatMessage(msgText)}
+                          disabled={!currentRoomId}
+                          className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-[#128C7E] hover:text-white transition-all whitespace-nowrap disabled:opacity-50"
+                          style={{ borderColor: 'var(--rule)', color: '#128C7E' }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Messages Feed (Roommates) */}
+                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs bg-[#E5DDD5]">
+                      {!currentRoomId ? (
+                        <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
+                          <span className="text-3xl">🏠</span>
+                          <p className="text-xs font-bold text-slate-700">You are not in a flat roommate group yet.</p>
+                          <p className="text-[10px] text-center max-w-[240px] text-slate-600">Create or join a roommate flat in the **Goals & room dues** tab to start group chatting!</p>
+                        </div>
+                      ) : roommateChatMessages.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
+                          <span className="text-3xl">💬</span>
+                          <p className="text-xs font-bold text-slate-700">No messages in flat room yet.</p>
+                          <p className="text-[10px] text-slate-600">Type below to start chatting with your roommates!</p>
+                        </div>
+                      ) : (
+                        roommateChatMessages.map(msg => {
+                          const isMe = msg.sender === currentUser?.name;
+                          return (
+                            <div key={msg.id} className={`flex gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                              {!isMe && (
+                                <div className="w-5 h-5 rounded-full bg-teal-650 text-white flex items-center justify-center text-[8px] font-bold flex-shrink-0 mt-1">
+                                  {msg.sender.charAt(0)}
+                                </div>
+                              )}
+                              <div className="flex flex-col gap-0.5 max-w-[75%]">
+                                <div
+                                  className={`p-2.5 rounded-xl shadow-xs leading-relaxed text-[11px] relative ${
+                                    isMe
+                                      ? 'bg-[#DCF8C6] text-slate-800 rounded-tr-none'
+                                      : 'bg-white text-slate-800 rounded-tl-none border'
+                                  }`}
+                                  style={{ borderColor: !isMe ? 'var(--rule)' : 'transparent' }}
+                                >
+                                  {!isMe && (
+                                    <p className="text-[8px] font-bold text-teal-800 mb-0.5 uppercase tracking-wider">{msg.sender}</p>
+                                  )}
+                                  <p>{msg.text}</p>
+                                </div>
+                                <span className={`text-[7px] text-slate-500 px-0.5 ${isMe ? 'text-right' : 'text-left'}`}>
+                                  {new Date(msg.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </div>
+                              {isMe && (
+                                <div className="w-5 h-5 rounded-full bg-[var(--ink)] text-[var(--card)] flex items-center justify-center text-[8px] font-bold flex-shrink-0 mt-1">
+                                  {msg.sender.charAt(0)}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                      <div ref={chatEndRef} />
+                    </div>
+
+                    {/* Chat input bar (Roommates) */}
+                    <div className="px-3 pb-3 pt-2 border-t flex gap-2 items-center bg-slate-50" style={{ borderColor: 'var(--rule)' }}>
+                      <button
+                        onClick={() => {
+                          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                          if (!SpeechRecognition) { showToast('error', 'Voice not supported — use Chrome or Edge'); return; }
+                          const rec = new SpeechRecognition();
+                          rec.lang = 'en-IN';
+                          rec.interimResults = false;
+                          rec.onresult = (e) => {
+                            const transcript = e.results[0][0].transcript;
+                            setRoommateChatInput(transcript);
+                            setTimeout(() => sendRoommateChatMessage(transcript), 200);
+                          };
+                          rec.onerror = () => showToast('error', 'Could not hear you. Try again.');
+                          rec.start();
+                          showToast('success', '🎙️ Listening for your message...');
+                        }}
+                        disabled={!currentRoomId}
+                        className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white flex items-center justify-center flex-shrink-0 transition shadow-sm"
+                        title="Speak your message"
+                      >
+                        <Icons.Microphone className="w-3.5 h-3.5" />
+                      </button>
+                      <input
+                        type="text"
+                        placeholder={currentRoomId ? "Type message... or tap 🎙️ to speak" : "Join a flat to chat..."}
+                        disabled={!currentRoomId}
+                        className="flex-1 ledger-input-box text-xs disabled:bg-slate-200/50"
+                        value={roommateChatInput}
+                        onChange={e => setRoommateChatInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') sendRoommateChatMessage(); }}
+                      />
+                      <button
+                        onClick={() => sendRoommateChatMessage()}
+                        disabled={!currentRoomId || !roommateChatInput.trim()}
+                        className="btn-vintage-ink flex-shrink-0 px-3 py-1.5 text-xs disabled:opacity-50"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Dynamic Mistake Flags */}
