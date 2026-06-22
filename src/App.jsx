@@ -1540,6 +1540,40 @@ export default function PersonalLedger() {
     }
   };
 
+  // --- Savings Goals Handlers ---
+  const handleAddGoal = (e) => {
+    e.preventDefault();
+    if (!goalForm.name || !goalForm.target) {
+      showToast('error', 'Please fill in goal name and target amount.');
+      return;
+    }
+    const newGoal = {
+      id: 'g_' + Date.now(),
+      name: goalForm.name,
+      target: parseFloat(goalForm.target) || 0,
+      current: parseFloat(goalForm.current) || 0,
+      deadline: goalForm.deadline || isoDate(new Date())
+    };
+    setGoals(prev => [...prev, newGoal]);
+    setGoalForm({ name: '', target: '', current: '', deadline: '' });
+    showToast('success', `Created savings goal: "${newGoal.name}"`);
+  };
+
+  const handleDeleteGoal = (id) => {
+    if (!confirm('Are you sure you want to delete this savings goal?')) return;
+    setGoals(prev => prev.filter(g => g.id !== id));
+    showToast('success', 'Savings goal deleted.');
+  };
+
+  const handleUpdateGoalProgress = (id, newCurrent) => {
+    setGoals(prev => prev.map(g => {
+      if (g.id === id) {
+        return { ...g, current: Math.max(0, parseFloat(newCurrent) || 0) };
+      }
+      return g;
+    }));
+  };
+
   // --- Dates Variables ---
   const todayStr = isoDate(new Date());
   const curMonthStr = todayStr.slice(0, 7);
@@ -3963,9 +3997,18 @@ export default function PersonalLedger() {
               style={{ borderColor: 'var(--rule)' }}
             >
               <span className="flex items-center"><Icons.Goals /> Goals & room dues</span>
-              {roommateDues.duesList.length > 0 && (
-                <span className="text-[9px] px-1 py-0.2 rounded bg-red-600/10 text-red-800 font-bold border border-red-500/20">{roommateDues.duesList.length}</span>
-              )}
+              {(() => {
+                const pendingGoalsCount = goals.filter(g => g.current < g.target).length;
+                const totalDuesCount = roommateDues.duesList.length + pendingGoalsCount;
+                if (totalDuesCount > 0) {
+                  return (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-600/10 text-red-800 font-bold border border-red-500/20">
+                      {totalDuesCount}
+                    </span>
+                  );
+                }
+                return null;
+              })()}
             </button>
             <button
               onClick={() => { setActiveTab('coach'); setAnalysisType('personal'); setIsMobileMenuOpen(false); }}
@@ -5856,16 +5899,23 @@ export default function PersonalLedger() {
               </div>
 
               {/* Personal Goals (Right column) */}
-              <div className="blur-card rounded p-5 lg:col-span-1 space-y-4">
-                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-950 border-b pb-2" style={{ borderColor: 'var(--rule)' }}>🎯 {currentUser?.name?.split(' ')[0] || 'My'}'s Bachelor Goals</h3>
-                <div className="space-y-4">
+              <div className="blur-card rounded p-5 lg:col-span-1 space-y-5">
+                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-950 border-b pb-2" style={{ borderColor: 'var(--rule)' }}>🎯 {currentUser?.name?.split(' ')[0] || 'My'}'s Savings Goals</h3>
+                
+                {/* List Savings Goals */}
+                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
                   {goals.map(g => {
                     const percent = Math.min(100, Math.round((g.current / g.target) * 100));
                     return (
-                      <div key={g.id} className="space-y-1">
-                        <div className="flex justify-between text-xs font-bold">
-                          <span className="text-slate-800">{g.name}</span>
-                          <span className="font-mono">{percent}%</span>
+                      <div key={g.id} className="space-y-1.5 p-2 bg-slate-900/5 rounded border" style={{ borderColor: 'var(--rule)' }}>
+                        <div className="flex justify-between text-xs font-bold items-center">
+                          <span className="text-slate-800 truncate pr-2" title={g.name}>{g.name}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[10px]">{percent}%</span>
+                            <button onClick={() => handleDeleteGoal(g.id)} className="text-red-500 hover:text-red-700 transition" title="Delete Goal">
+                              <Icons.Trash className="w-3 h-3" />
+                            </button>
+                          </div>
                         </div>
                         <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden border border-slate-300">
                           <div 
@@ -5873,14 +5923,80 @@ export default function PersonalLedger() {
                             style={{ width: `${percent}%` }}
                           />
                         </div>
-                        <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                          <span>{fmt(g.current)} saved</span>
+                        
+                        {/* Target & Current */}
+                        <div className="flex justify-between text-[9px] text-slate-500 font-mono">
                           <span>Target: {fmt(g.target)}</span>
+                          <span>Deadline: {g.deadline}</span>
+                        </div>
+                        
+                        {/* Quick Saved Update */}
+                        <div className="flex items-center gap-1.5 mt-1 pt-1.5 border-t border-dashed border-slate-200">
+                          <span className="text-[9px] text-slate-500 font-bold">Saved:</span>
+                          <input 
+                            type="number"
+                            value={g.current}
+                            onChange={(e) => handleUpdateGoalProgress(g.id, e.target.value)}
+                            className="w-full bg-white border rounded px-1.5 py-0.5 text-[10px] outline-none text-slate-800 font-mono"
+                            style={{ borderColor: 'var(--rule)' }}
+                          />
                         </div>
                       </div>
                     );
                   })}
+                  {goals.length === 0 && (
+                    <div className="text-center py-4 text-xs text-slate-500">No savings goals created yet.</div>
+                  )}
                 </div>
+
+                {/* Add New Goal Form */}
+                <form onSubmit={handleAddGoal} className="space-y-3 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
+                  <h4 className="text-[10px] font-bold text-slate-900 uppercase tracking-wider">➕ Add Savings Goal</h4>
+                  <div className="space-y-2">
+                    <input 
+                      type="text"
+                      placeholder="Goal Name (e.g. New Phone)"
+                      value={goalForm.name}
+                      onChange={(e) => setGoalForm(prev => ({ ...prev, name: e.target.value }))}
+                      className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800"
+                      style={{ borderColor: 'var(--rule)' }}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input 
+                        type="number"
+                        placeholder="Target (₹)"
+                        value={goalForm.target}
+                        onChange={(e) => setGoalForm(prev => ({ ...prev, target: e.target.value }))}
+                        className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800 font-mono"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                      <input 
+                        type="number"
+                        placeholder="Current (₹)"
+                        value={goalForm.current}
+                        onChange={(e) => setGoalForm(prev => ({ ...prev, current: e.target.value }))}
+                        className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800 font-mono"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <label className="text-[9px] text-slate-500 font-bold mb-0.5">DEADLINE</label>
+                      <input 
+                        type="date"
+                        value={goalForm.deadline}
+                        onChange={(e) => setGoalForm(prev => ({ ...prev, deadline: e.target.value }))}
+                        className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800 font-mono"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                    </div>
+                    <button 
+                      type="submit"
+                      className="w-full py-1.5 bg-[var(--ink)] hover:bg-[var(--ink-soft)] text-[var(--card)] rounded text-[10px] font-bold uppercase tracking-wider transition shadow-xs"
+                    >
+                      Create Goal
+                    </button>
+                  </div>
+                </form>
               </div>
 
             </div>
