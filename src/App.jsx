@@ -967,6 +967,78 @@ export default function PersonalLedger() {
     } catch (e) {}
   }
 
+  // Admin: Remove a specific member from the flat
+  async function handleKickMember(memberId, memberName) {
+    if (!session || !currentRoomId) return;
+    if (session.user.id !== roomAdminId) {
+      showToast('error', 'Only the Group Admin can remove members.');
+      return;
+    }
+    if (!window.confirm(`Remove ${memberName} from this flat? They will lose access to all shared splits.`)) return;
+    try {
+      const { error } = await supabase
+        .from('room_members')
+        .delete()
+        .match({ room_id: currentRoomId, user_id: memberId });
+      if (error) throw error;
+      showToast('success', `${memberName} has been removed from the flat.`);
+      await fetchRoommatesAndTransactions(session.user.id, currentRoomId);
+    } catch (e) {
+      showToast('error', 'Could not remove member. Please try again.');
+    }
+  }
+
+  // Admin: Permanently delete the entire flat (all members, shared txs, room record)
+  async function handleDeleteFlat() {
+    if (!session || !currentRoomId) return;
+    if (session.user.id !== roomAdminId) {
+      showToast('error', 'Only the Group Admin can delete the flat.');
+      return;
+    }
+    const confirmation = window.prompt(
+      `⚠️ DANGER ZONE\n\nThis will permanently DELETE the flat and ALL shared transactions for every member.\n\nType the flat invite code "${currentRoomCode}" to confirm:`
+    );
+    if (!confirmation || confirmation.trim().toUpperCase() !== currentRoomCode.toUpperCase()) {
+      showToast('error', 'Delete cancelled — invite code did not match.');
+      return;
+    }
+    setRoomLoading(true);
+    try {
+      // 1. Delete all shared transactions in this room
+      await supabase
+        .from('transactions')
+        .delete()
+        .eq('room_id', currentRoomId)
+        .eq('is_shared', true);
+
+      // 2. Remove all members from the room
+      await supabase
+        .from('room_members')
+        .delete()
+        .eq('room_id', currentRoomId);
+
+      // 3. Delete the room record itself
+      await supabase
+        .from('rooms')
+        .delete()
+        .eq('id', currentRoomId);
+
+      // 4. Reset local state
+      setCurrentRoomId(null);
+      setCurrentRoomCode('');
+      setRoommates([]);
+      setPendingMembers([]);
+      setTransactions([]);
+      setRoomMembershipStatus('none');
+      showToast('success', 'Flat has been permanently deleted.');
+      await fetchUserPersonalTransactions(session.user.id);
+    } catch (e) {
+      showToast('error', 'Could not delete flat. Please try again.');
+    } finally {
+      setRoomLoading(false);
+    }
+  }
+
   // Realtime subscription hook
   useEffect(() => {
     if (!session || !currentRoomId || roomMembershipStatus !== 'accepted') return;
@@ -5215,16 +5287,25 @@ export default function PersonalLedger() {
                               {isAdmin ? 'Group Admin' : 'Member'}
                             </span>
                             {roomAdminId === session?.user?.id && !isAdmin && (
-                              <button 
-                                onClick={() => {
-                                  if (confirm(`Are you sure you want to transfer Group Admin role to ${member.name}?`)) {
-                                    transferAdminRole(member.id, member.name);
-                                  }
-                                }}
-                                className="px-2 py-0.5 bg-[var(--ink)] text-[var(--card)] rounded text-[9px] font-bold"
-                              >
-                                Make Admin
-                              </button>
+                              <>
+                                <button 
+                                  onClick={() => {
+                                    if (confirm(`Are you sure you want to transfer Group Admin role to ${member.name}?`)) {
+                                      transferAdminRole(member.id, member.name);
+                                    }
+                                  }}
+                                  className="px-2 py-0.5 bg-[var(--ink)] text-[var(--card)] rounded text-[9px] font-bold"
+                                >
+                                  Make Admin
+                                </button>
+                                <button 
+                                  onClick={() => handleKickMember(member.id, member.name)}
+                                  className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded text-[9px] font-bold transition"
+                                  title="Remove from flat"
+                                >
+                                  Remove
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -5283,6 +5364,48 @@ export default function PersonalLedger() {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Danger Zone — Leave or Delete Flat */}
+                <div className="mt-2 pt-4 border-t-2 border-dashed border-red-200">
+                  <h4 className="text-[10px] uppercase font-bold tracking-wider text-red-700 mb-2 flex items-center gap-1.5">
+                    <span>⚠️</span> Danger Zone
+                  </h4>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    {/* Regular member — just Leave */}
+                    {session?.user?.id !== roomAdminId && (
+                      <button
+                        onClick={handleLeaveRoom}
+                        className="flex-1 px-3 py-2 border-2 border-slate-300 hover:border-red-400 text-slate-600 hover:text-red-700 rounded text-[11px] font-bold transition"
+                      >
+                        🚪 Leave Flat
+                      </button>
+                    )}
+
+                    {/* Admin — Leave OR Delete */}
+                    {session?.user?.id === roomAdminId && (
+                      <>
+                        <button
+                          onClick={handleLeaveRoom}
+                          className="flex-1 px-3 py-2 border-2 border-slate-300 hover:border-slate-500 text-slate-600 hover:text-slate-900 rounded text-[11px] font-bold transition"
+                        >
+                          🚪 Leave Flat
+                        </button>
+                        <button
+                          onClick={handleDeleteFlat}
+                          disabled={roomLoading}
+                          className="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 active:bg-red-800 disabled:opacity-50 text-white rounded text-[11px] font-bold transition shadow-sm"
+                        >
+                          {roomLoading ? 'Deleting...' : '🗑️ Delete Entire Flat'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <p className="text-[9px] text-slate-400 mt-1.5 leading-relaxed">
+                    {session?.user?.id === roomAdminId
+                      ? '⚠️ Delete Flat permanently removes all members, all shared transactions and the flat itself. You must type the invite code to confirm.'
+                      : 'Leaving removes you from the flat. Your personal transactions are preserved.'}
+                  </p>
                 </div>
 
                 {/* Dues Settlement Matrix */}
