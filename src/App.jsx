@@ -349,6 +349,69 @@ function fmt(n) {
   return '₹' + v.toLocaleString('en-IN');
 }
 
+const DEFAULT_AVATARS = [
+  { id: 'avatar1', value: '👨', label: 'Man' },
+  { id: 'avatar2', value: '👩', label: 'Woman' },
+  { id: 'avatar3', value: '🧑', label: 'Young Face' },
+  { id: 'avatar4', value: '🧔', label: 'Bearded Man' },
+  { id: 'avatar5', value: '👵', label: 'Elderly Woman' },
+  { id: 'avatar6', value: '👴', label: 'Elderly Man' },
+  { id: 'avatar7', value: '🦁', label: 'Lion' },
+  { id: 'avatar8', value: '🦊', label: 'Fox' },
+  { id: 'avatar9', value: '🐼', label: 'Panda' },
+  { id: 'avatar10', value: '🐱', label: 'Cat' },
+];
+
+const parseProfile = (profile) => {
+  if (!profile) return { name: 'User', email: '', avatar: null };
+  let name = profile.name || 'User';
+  let avatar = null;
+  if (name.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(name);
+      name = parsed.name || 'User';
+      avatar = parsed.avatar || null;
+    } catch (e) {}
+  }
+  return {
+    ...profile,
+    name,
+    avatar
+  };
+};
+
+const renderAvatar = (avatar, name, sizeClass = "w-6 h-6 text-[10px]") => {
+  if (avatar && avatar.startsWith('data:')) {
+    return (
+      <img
+        src={avatar}
+        alt={name || 'User'}
+        className={`${sizeClass} rounded-full object-cover border`}
+        style={{ borderColor: 'var(--rule)' }}
+      />
+    );
+  }
+  if (avatar) {
+    return (
+      <div
+        className={`${sizeClass} rounded-full flex items-center justify-center bg-slate-100 border text-center select-none`}
+        style={{ borderColor: 'var(--rule)' }}
+      >
+        {avatar}
+      </div>
+    );
+  }
+  const initials = name ? name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'U';
+  return (
+    <div
+      className={`${sizeClass} rounded-full flex items-center justify-center font-bold text-white uppercase select-none`}
+      style={{ background: 'var(--ink)' }}
+    >
+      {initials}
+    </div>
+  );
+};
+
 export default function PersonalLedger() {
   // --- Supabase Session State ---
   const [session, setSession] = useState(null);
@@ -381,6 +444,12 @@ export default function PersonalLedger() {
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [pendingInvites, setPendingInvites] = useState([]);
   const [pendingMembers, setPendingMembers] = useState([]);
+
+  // --- Profile Settings State ---
+  const [isProfileSettingsOpen, setIsProfileSettingsOpen] = useState(false);
+  const [profileNameInput, setProfileNameInput] = useState('');
+  const [profileAvatarInput, setProfileAvatarInput] = useState('');
+  const [profileSaveLoading, setProfileSaveLoading] = useState(false);
 
   // --- Core Financial States ---
   const [salary, setSalary] = useState(50000); 
@@ -582,7 +651,20 @@ export default function PersonalLedger() {
     setLoading(true);
     try {
       // 1. Set immediate fallback profile so the UI never stays blank
-      const fallbackProfile = { id: authUser.id, email: authUser.email, name: authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'User' };
+      let localFallback = null;
+      try {
+        const stored = localStorage.getItem(`profile_avatar_${authUser.id}`);
+        if (stored) {
+          localFallback = JSON.parse(stored);
+        }
+      } catch (e) {}
+
+      const fallbackProfile = { 
+        id: authUser.id, 
+        email: authUser.email, 
+        name: localFallback?.name || authUser.user_metadata?.name || authUser.email?.split('@')[0] || 'User',
+        avatar: localFallback?.avatar || null
+      };
       setCurrentUser(fallbackProfile);
 
       // 2. Try to fetch full profile (non-blocking)
@@ -592,7 +674,10 @@ export default function PersonalLedger() {
           .select('*')
           .eq('id', authUser.id)
           .single();
-        if (profile) setCurrentUser(profile);
+        if (profile) {
+          const parsed = parseProfile(profile);
+          setCurrentUser(parsed);
+        }
       } catch (e) {
         console.warn('Profile fetch failed, using fallback', e);
       }
@@ -713,11 +798,12 @@ export default function PersonalLedger() {
       const roommatesList = members
         .filter(m => m.user_id !== userId)
         .map(m => {
-          const prof = profileMap[m.user_id];
+          const prof = parseProfile(profileMap[m.user_id]);
           return {
             id: m.user_id,
-            name: prof?.name || 'Roommate',
-            email: prof?.email || ''
+            name: prof.name || 'Roommate',
+            email: prof.email || '',
+            avatar: prof.avatar || null
           };
         });
       setRoommates(roommatesList);
@@ -748,11 +834,12 @@ export default function PersonalLedger() {
         }
 
         const pendingList = pendingMembersData.map(m => {
-          const prof = pendingProfileMap[m.user_id];
+          const prof = parseProfile(pendingProfileMap[m.user_id]);
           return {
             id: m.user_id,
-            name: prof?.name || 'Roommate',
-            email: prof?.email || ''
+            name: prof.name || 'Roommate',
+            email: prof.email || '',
+            avatar: prof.avatar || null
           };
         });
         setPendingMembers(pendingList);
@@ -1609,6 +1696,100 @@ export default function PersonalLedger() {
     }
   };
 
+  const handleSaveProfile = async (e) => {
+    if (e) e.preventDefault();
+    if (!profileNameInput || !profileNameInput.trim()) {
+      showToast('error', 'Name cannot be empty.');
+      return;
+    }
+    if (!session) return;
+    
+    setProfileSaveLoading(true);
+    const newName = profileNameInput.trim();
+    const newAvatar = profileAvatarInput;
+    const payload = JSON.stringify({ name: newName, avatar: newAvatar });
+    
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ name: payload })
+        .eq('id', session.user.id);
+        
+      if (error) throw error;
+      
+      localStorage.setItem(`profile_avatar_${session.user.id}`, JSON.stringify({ name: newName, avatar: newAvatar }));
+      
+      setCurrentUser(prev => ({
+        ...prev,
+        name: newName,
+        avatar: newAvatar
+      }));
+      
+      showToast('success', 'Profile updated successfully!');
+      setIsProfileSettingsOpen(false);
+      
+      if (currentRoomId) {
+        await fetchRoommatesAndTransactions(session.user.id, currentRoomId);
+      }
+    } catch (err) {
+      console.error("Profile update failed:", err);
+      localStorage.setItem(`profile_avatar_${session.user.id}`, JSON.stringify({ name: newName, avatar: newAvatar }));
+      setCurrentUser(prev => ({
+        ...prev,
+        name: newName,
+        avatar: newAvatar
+      }));
+      showToast('success', 'Profile updated locally (offline fallback).');
+      setIsProfileSettingsOpen(false);
+    } finally {
+      setProfileSaveLoading(false);
+    }
+  };
+
+  const handleProfileImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('error', 'File is too large. Please select an image under 5MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 96;
+        const MAX_HEIGHT = 96;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        setProfileAvatarInput(dataUrl);
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
   // --- Dates Variables ---
   const todayStr = isoDate(new Date());
   const curMonthStr = todayStr.slice(0, 7);
@@ -1905,26 +2086,28 @@ export default function PersonalLedger() {
               sortKey = parsed.timestamp;
             }
           }
-        } catch (e) {
-          // Keep raw text if not valid JSON
-        }
+        } catch (e) {}
         
         if (!time) {
-          // Fallback to local time from date
           const dateSource = t.created_at || t.date;
           time = new Date(dateSource).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
         }
 
+        const senderProfile = t.user_id === session?.user?.id ? currentUser : roommates.find(r => r.id === t.user_id);
+        const senderName = senderProfile ? senderProfile.name : (t.logged_by || 'Roommate');
+        const senderAvatar = senderProfile ? senderProfile.avatar : null;
+
         return {
           id: t.id,
-          sender: t.logged_by,
+          sender: senderName,
+          avatar: senderAvatar,
           text,
           time,
           sortKey
         };
       })
       .sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-  }, [transactions]);
+  }, [transactions, roommates, currentUser, session]);
 
   const healthScore = useMemo(() => {
     if (salary === 0) return 0;
@@ -3974,9 +4157,7 @@ export default function PersonalLedger() {
               Flat: {currentRoomCode}
             </span>
           )}
-          <div className="w-6 h-6 rounded-full bg-[var(--ink)] text-[var(--card)] flex items-center justify-center text-[10px] font-bold uppercase">
-            {currentUser?.name?.slice(0, 2) || 'U'}
-          </div>
+          {renderAvatar(currentUser?.avatar, currentUser?.name, "w-6 h-6 text-[10px]")}
         </div>
       </header>
 
@@ -4013,8 +4194,26 @@ export default function PersonalLedger() {
               <span><Icons.User className="w-3.5 h-3.5 mr-1 inline text-[var(--ink-soft)]" /> profile info</span>
             </div>
             <div className="bg-white/40 p-2.5 rounded border border-dashed text-xs space-y-1.5" style={{ borderColor: 'var(--rule)' }}>
-              <p className="font-bold text-[var(--ink)] truncate">User: {currentUser?.name}</p>
-              <p className="text-[10px] text-slate-500 truncate">{currentUser?.email}</p>
+              <div className="flex items-center gap-2">
+                {renderAvatar(currentUser?.avatar, currentUser?.name, "w-8 h-8 text-xs")}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1">
+                    <p className="font-bold text-[var(--ink)] truncate">{currentUser?.name}</p>
+                    <button
+                      onClick={() => {
+                        setProfileNameInput(currentUser?.name || '');
+                        setProfileAvatarInput(currentUser?.avatar || '');
+                        setIsProfileSettingsOpen(true);
+                      }}
+                      className="text-[10px] text-indigo-650 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                      title="Edit Profile"
+                    >
+                      ✏️
+                    </button>
+                  </div>
+                  <p className="text-[9px] text-slate-500 truncate">{currentUser?.email}</p>
+                </div>
+              </div>
               {/* Only show Flat Code + Add Flatmate after a flat is created/joined */}
               {roomMembershipStatus !== 'none' && (
                 <div className="pt-1.5 border-t border-dashed flex justify-between items-center text-[10px]" style={{ borderColor: 'var(--rule)' }}>
@@ -5779,9 +5978,12 @@ export default function PersonalLedger() {
                   {/* List roommates */}
                   <div className="space-y-2 mt-3">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-slate-900/5 rounded border text-xs" style={{ borderColor: 'var(--rule)' }}>
-                      <div className="min-w-0">
-                        <span className="font-bold text-slate-800 truncate block">{currentUser?.name} (You)</span>
-                        <span className="text-[9px] text-slate-500 block truncate">{currentUser?.email}</span>
+                      <div className="flex items-center gap-2 min-w-0">
+                        {renderAvatar(currentUser?.avatar, currentUser?.name, "w-8 h-8 text-xs")}
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-800 truncate block">{currentUser?.name} (You)</span>
+                          <span className="text-[9px] text-slate-500 block truncate">{currentUser?.email}</span>
+                        </div>
                       </div>
                       <div className="flex-shrink-0">
                         <span className={`px-1.5 py-0.5 font-bold border text-[9px] uppercase rounded ${
@@ -5798,9 +6000,12 @@ export default function PersonalLedger() {
                       const isAdmin = member.id === roomAdminId;
                       return (
                         <div key={member.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-slate-900/5 rounded border text-xs" style={{ borderColor: 'var(--rule)' }}>
-                          <div className="min-w-0">
-                            <span className="font-bold text-slate-800 truncate block">{member.name}</span>
-                            <span className="text-[9px] text-slate-500 block truncate">{member.email}</span>
+                          <div className="flex items-center gap-2 min-w-0">
+                            {renderAvatar(member.avatar, member.name, "w-8 h-8 text-xs")}
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-800 truncate block">{member.name}</span>
+                              <span className="text-[9px] text-slate-500 block truncate">{member.email}</span>
+                            </div>
                           </div>
                           <div className="flex items-center space-x-2 flex-shrink-0">
                             <span className={`px-1.5 py-0.5 font-bold border text-[9px] uppercase rounded ${
@@ -6175,8 +6380,8 @@ export default function PersonalLedger() {
                             )}
                           </div>
                           {msg.sender === 'user' && (
-                            <div className="w-6 h-6 rounded-full bg-[var(--ink)] flex items-center justify-center text-[var(--card)] font-black text-[9px] flex-shrink-0 mt-0.5">
-                              {currentUser?.name?.charAt(0) || 'U'}
+                            <div className="flex-shrink-0 mt-0.5">
+                              {renderAvatar(currentUser?.avatar, currentUser?.name, "w-6 h-6 text-[9px]")}
                             </div>
                           )}
                         </div>
@@ -6283,8 +6488,8 @@ export default function PersonalLedger() {
                           return (
                             <div key={msg.id} className={`flex gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
                               {!isMe && (
-                                <div className="w-5 h-5 rounded-full bg-teal-650 text-white flex items-center justify-center text-[8px] font-bold flex-shrink-0 mt-1">
-                                  {msg.sender.charAt(0)}
+                                <div className="flex-shrink-0 mt-1">
+                                  {renderAvatar(msg.avatar, msg.sender, "w-5 h-5 text-[8px]")}
                                 </div>
                               )}
                               <div className="flex flex-col gap-0.5 max-w-[75%]">
@@ -6306,8 +6511,8 @@ export default function PersonalLedger() {
                                 </span>
                               </div>
                               {isMe && (
-                                <div className="w-5 h-5 rounded-full bg-[var(--ink)] text-[var(--card)] flex items-center justify-center text-[8px] font-bold flex-shrink-0 mt-1">
-                                  {msg.sender.charAt(0)}
+                                <div className="flex-shrink-0 mt-1">
+                                  {renderAvatar(msg.avatar, msg.sender, "w-5 h-5 text-[8px]")}
                                 </div>
                               )}
                             </div>
@@ -6837,6 +7042,85 @@ export default function PersonalLedger() {
                 <div className="flex gap-2">
                   <button type="submit" className="flex-1 btn-vintage-ink">Send Invitation</button>
                   <button type="button" onClick={() => setIsAuthOpen(false)} className="flex-1 btn-vintage-outline">Cancel</button>
+                </div>
+              )}
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Profile Settings Modal */}
+      {isProfileSettingsOpen && (
+        <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="room-card max-w-sm w-full rounded-lg p-5 space-y-4" style={{ background: 'var(--card)', border: '1px solid var(--rule)' }}>
+            <div className="flex justify-between items-center border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+              <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)]">Profile Settings</h3>
+              <button onClick={() => setIsProfileSettingsOpen(false)} className="text-xs font-bold text-slate-400 hover:text-slate-800">✕</button>
+            </div>
+            
+            <form onSubmit={handleSaveProfile} className="space-y-4">
+              {/* Profile Name */}
+              <div className="flex flex-col">
+                <label className="text-[9px] uppercase font-bold tracking-wider mb-1 text-slate-500">Your Display Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Sriram"
+                  className="ledger-input-box"
+                  value={profileNameInput}
+                  onChange={e => setProfileNameInput(e.target.value)}
+                  required
+                />
+              </div>
+
+              {/* Avatar Preview */}
+              <div className="flex flex-col items-center gap-2 bg-slate-500/5 p-3 rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--rule)' }}>
+                <span className="text-[9px] uppercase font-bold tracking-wider text-slate-500">Avatar Preview</span>
+                {renderAvatar(profileAvatarInput, profileNameInput, "w-16 h-16 text-2xl")}
+              </div>
+
+              {/* Avatar Options Selection */}
+              <div className="space-y-2">
+                <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">Choose Avatar</label>
+                
+                {/* Default Emojis */}
+                <div className="grid grid-cols-5 gap-1.5 p-1 bg-white/40 rounded border" style={{ borderColor: 'var(--rule)' }}>
+                  {DEFAULT_AVATARS.map(av => {
+                    const isSelected = profileAvatarInput === av.value;
+                    return (
+                      <button
+                        key={av.id}
+                        type="button"
+                        onClick={() => setProfileAvatarInput(av.value)}
+                        className={`p-1.5 text-lg rounded hover:bg-slate-200 transition-all ${isSelected ? 'bg-slate-200 border border-slate-400 scale-105 shadow-xs' : 'border border-transparent'}`}
+                        title={av.label}
+                      >
+                        {av.value}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Custom File Upload */}
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="text-[9px] text-slate-500">Or upload a photo:</span>
+                  <label className="cursor-pointer text-[10px] font-bold bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded border transition-all text-slate-700">
+                    Choose Photo
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProfileImageUpload}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {profileSaveLoading ? (
+                <div className="text-xs text-center text-slate-500">Saving changes...</div>
+              ) : (
+                <div className="flex gap-2 pt-2">
+                  <button type="submit" className="flex-1 btn-vintage-ink">Save Changes</button>
+                  <button type="button" onClick={() => setIsProfileSettingsOpen(false)} className="flex-1 btn-vintage-outline">Cancel</button>
                 </div>
               )}
             </form>
