@@ -1387,15 +1387,22 @@ export default function PersonalLedger() {
     const noteText = form.note.trim();
     const noteWithSource = noteText ? `${noteText} [source:${form.source || 'manual'}]` : `[source:${form.source || 'manual'}]`;
 
+    const payerId = form.paidById || session.user.id;
+    let payerName = currentUser?.name || 'Roommate';
+    if (payerId !== session.user.id) {
+      const found = roommates.find(r => r.id === payerId);
+      if (found) payerName = found.name;
+    }
+
     const newTx = {
-      user_id: session.user.id,
+      user_id: payerId,
       ...(form.isShared && { room_id: currentRoomId }),
       category: form.category,
       amount: amt,
       merchant: form.merchant.trim(),
       note: noteWithSource,
       is_shared: form.isShared,
-      logged_by: currentUser?.name || 'Roommate',
+      logged_by: payerName,
       date: form.date
     };
 
@@ -1415,7 +1422,8 @@ export default function PersonalLedger() {
         merchant: '',
         note: '',
         source: 'manual',
-        isShared: false
+        isShared: false,
+        paidById: session.user.id
       });
     } catch (e) {
       showToast('error', 'Could not log transaction.');
@@ -4629,6 +4637,23 @@ export default function PersonalLedger() {
                       onChange={e => setForm({ ...form, note: e.target.value })}
                     />
                   </div>
+
+                  {/* Paid By dropdown (shown only in roommate mode) */}
+                  {analysisType === 'roommates' && roomMembershipStatus === 'accepted' && (
+                    <div className="flex flex-col animate-fade-in">
+                      <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Paid By</label>
+                      <select
+                        className="ledger-input-box cursor-pointer font-bold"
+                        value={form.paidById || session?.user?.id || ''}
+                        onChange={e => setForm({ ...form, paidById: e.target.value })}
+                      >
+                        <option value={session?.user?.id}>{currentUser?.name} (You)</option>
+                        {roommates.map(r => (
+                          <option key={r.id} value={r.id}>{r.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* Only show roommate split checkbox in roommates mode */}
                   {analysisType === 'roommates' && roomMembershipStatus === 'accepted' && (
