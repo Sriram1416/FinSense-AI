@@ -464,6 +464,11 @@ export default function PersonalLedger() {
   const [profileAvatarInput, setProfileAvatarInput] = useState('');
   const [profileSaveLoading, setProfileSaveLoading] = useState(false);
 
+  // --- Roommate Approval Split Strategy State ---
+  const [pendingApproveUserId, setPendingApproveUserId] = useState(null);
+  const [pendingApproveName, setPendingApproveName] = useState('');
+  const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
+
   // --- Core Financial States ---
   const [salary, setSalary] = useState(50000); 
   const [salaryInput, setSalaryInput] = useState('50000');
@@ -808,6 +813,12 @@ export default function PersonalLedger() {
         });
       }
 
+      // Update current user's join date from members list
+      const myRecord = members.find(m => m.user_id === userId);
+      if (myRecord) {
+        setCurrentUser(prev => prev ? { ...prev, joined_at: myRecord.created_at } : null);
+      }
+
       const roommatesList = members
         .filter(m => m.user_id !== userId)
         .map(m => {
@@ -816,7 +827,8 @@ export default function PersonalLedger() {
             id: m.user_id,
             name: prof.name || 'Roommate',
             email: prof.email || '',
-            avatar: prof.avatar || null
+            avatar: prof.avatar || null,
+            joined_at: m.created_at
           };
         });
       setRoommates(roommatesList);
@@ -1300,20 +1312,40 @@ export default function PersonalLedger() {
     }
   };
 
-  // Approve a pending roommate request from the host dashboard
-  const handleApproveRoommateRequest = async (roommateUserId) => {
+  // Approve a pending roommate request from the host dashboard (opens strategy modal)
+  const handleApproveRoommateRequest = (roommateUserId) => {
     if (!currentRoomId) return;
+    const rm = pendingMembers.find(m => m.id === roommateUserId);
+    const name = rm ? rm.name : 'Roommate';
+    setPendingApproveUserId(roommateUserId);
+    setPendingApproveName(name);
+    setIsApproveConfirmOpen(true);
+  };
+
+  const executeApproveRoommate = async (roommateUserId, splitPast) => {
+    if (!currentRoomId) return;
+    setRoomLoading(true);
     try {
+      const updateData = { 
+        status: 'accepted',
+        created_at: splitPast ? '1970-01-01T00:00:00Z' : new Date().toISOString()
+      };
+      
       const { error } = await supabase
         .from('room_members')
-        .update({ status: 'accepted' })
+        .update(updateData)
         .match({ room_id: currentRoomId, user_id: roommateUserId });
       
       if (error) throw error;
-      showToast('success', 'Roommate request approved!');
+      showToast('success', `${pendingApproveName} approved successfully!`);
+      setIsApproveConfirmOpen(false);
+      setPendingApproveUserId(null);
+      setPendingApproveName('');
       await fetchRoommatesAndTransactions(session.user.id, currentRoomId);
     } catch (e) {
       showToast('error', 'Error approving request.');
+    } finally {
+      setRoomLoading(false);
     }
   };
 
