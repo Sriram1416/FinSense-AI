@@ -907,14 +907,27 @@ export default function PersonalLedger() {
       if (data) {
         const mapped = data.map(tx => {
           const srcMatch = tx.note?.match(/\[source:(\w+)\]/);
-          const splitMatch = tx.note?.match(/\[split:(\d+)\]/);
+          const splitMatch = tx.note?.match(/\[split:([^\]]+)\]/);
           const cleanNote = tx.note
-            ? tx.note.replace(/\[source:\w+\]/, '').replace(/\[split:\d+\]/, '').trim()
+            ? tx.note.replace(/\[source:\w+\]/, '').replace(/\[split:[^\]]+\]/, '').trim()
             : '';
+          
+          let splitMembers = null;
+          let splitCount = null;
+          if (splitMatch) {
+            const rawVal = splitMatch[1];
+            if (/^\d+$/.test(rawVal)) {
+              splitCount = parseInt(rawVal, 10);
+            } else {
+              splitMembers = rawVal.split(',');
+            }
+          }
+
           return {
             ...tx,
             source: srcMatch ? srcMatch[1] : 'manual',
-            splitCount: splitMatch ? parseInt(splitMatch[1], 10) : null,
+            splitMembers,
+            splitCount,
             note: cleanNote
           };
         });
@@ -1660,6 +1673,24 @@ export default function PersonalLedger() {
     } catch (e) {
       showToast('error', 'Could not log transaction.');
     }
+  };
+  const handleEditClick = (tx) => {
+    setEditingTxId(tx.id);
+    setForm({
+      date: tx.date,
+      category: tx.category,
+      amount: String(tx.amount),
+      merchant: tx.merchant,
+      note: tx.note || '',
+      source: tx.source || 'manual',
+      isShared: tx.is_shared,
+      presentMembers: tx.splitMembers || null,
+      paidById: tx.user_id
+    });
+    setAnalysisType(tx.is_shared ? 'roommates' : 'personal');
+    setActiveTab('transactions');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    showToast('info', `Editing transaction. Adjust splits and click Update.`);
   };
 
   const deleteTransaction = async (id) => {
