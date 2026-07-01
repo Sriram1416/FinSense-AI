@@ -4758,10 +4758,10 @@ export default function PersonalLedger() {
                                   value={flatRentInput}
                                   onChange={e => setFlatRentInput(e.target.value)}
                                   placeholder="12000"
-                                  disabled={roomAdminId !== session?.user?.id}
+                                  disabled={roomAdminId && roomAdminId !== session?.user?.id}
                                 />
                               </div>
-                              {roomAdminId === session?.user?.id ? (
+                              {(!roomAdminId || roomAdminId === session?.user?.id) ? (
                                 <>
                                   <button onClick={saveFlatRent} className="px-2 py-0.5 bg-[var(--ink)] text-[var(--card)] rounded text-[9px] font-bold">Save</button>
                                   <button onClick={quickLogRent} className="px-2 py-0.5 bg-[#5A6483] text-[#FBF8F0] hover:bg-[#4E5672] rounded text-[9px] font-bold flex items-center gap-0.5">
