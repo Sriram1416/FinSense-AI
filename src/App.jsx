@@ -475,11 +475,14 @@ export default function PersonalLedger() {
   const [transactions, setTransactions] = useState([]);
   
   const adminConfigTx = useMemo(() => {
-    return transactions.find(t => 
+    const configs = transactions.filter(t => 
       t.is_shared && 
       t.category === 'System' && 
       t.merchant === 'AdminConfig'
     );
+    if (configs.length === 0) return null;
+    // Sort by database created_at timestamp descending, so the newest config takes precedence
+    return [...configs].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
   }, [transactions]);
 
   const roomAdminId = useMemo(() => {
@@ -487,8 +490,19 @@ export default function PersonalLedger() {
       const match = adminConfigTx.note?.match(/admin_id:([a-fA-F0-9-]+)/);
       if (match) return match[1];
     }
+    // Fallback: Default to the oldest member in the room (joined first)
+    if ((roommates && roommates.length > 0) || currentUser) {
+      const allMembers = [
+        ...(currentUser && currentUser.joined_at ? [{ id: session?.user?.id, joined_at: currentUser.joined_at }] : []),
+        ...roommates.map(r => ({ id: r.id, joined_at: r.joined_at }))
+      ].filter(m => m.joined_at);
+      if (allMembers.length > 0) {
+        allMembers.sort((a, b) => new Date(a.joined_at) - new Date(b.joined_at));
+        return allMembers[0].id;
+      }
+    }
     return null;
-  }, [adminConfigTx]);
+  }, [adminConfigTx, roommates, currentUser, session]);
 
   const roomAdminName = useMemo(() => {
     if (!roomAdminId) return 'Host';
@@ -1487,7 +1501,7 @@ export default function PersonalLedger() {
   };
 
   const transferAdminRole = async (newAdminId, newAdminName) => {
-    if (!session || !currentRoomId || !adminConfigTx) return;
+    if (!session || !currentRoomId) return;
     if (session.user.id !== roomAdminId) {
       showToast('error', 'Only the current Group Admin can transfer administrative role.');
       return;
@@ -1504,11 +1518,12 @@ export default function PersonalLedger() {
       if (deleteErr) throw deleteErr;
 
       // 2. Insert new AdminConfig transaction with newAdminId
+      const currentRent = adminConfigTx ? adminConfigTx.amount : 12000;
       const tx = {
-        user_id: newAdminId,
+        user_id: session.user.id, // Write using current user's session ID to satisfy RLS
         room_id: currentRoomId,
         category: 'System',
-        amount: adminConfigTx.amount,
+        amount: currentRent,
         merchant: 'AdminConfig',
         note: `admin_id:${newAdminId}`,
         is_shared: true,
@@ -1532,66 +1547,7 @@ export default function PersonalLedger() {
     }
   }, [adminConfigTx]);
 
-  // Auto-upgrade missing config
-  useEffect(() => {
-    if (!session || !currentRoomId || !transactions || loading) return;
-    
-    const configExists = transactions.some(t => 
-      t.is_shared && 
-      t.category === 'System' && 
-      t.merchant === 'AdminConfig'
-    );
 
-    if (!configExists) {
-      const initAdminConfig = async () => {
-        const { data: existing } = await supabase
-          .from('transactions')
-          .select('id')
-          .eq('room_id', currentRoomId)
-          .eq('category', 'System')
-          .eq('merchant', 'AdminConfig')
-          .limit(1);
-        
-        if (existing && existing.length > 0) return;
-
-        const { data: members } = await supabase
-          .from('room_members')
-          .select('user_id')
-          .eq('room_id', currentRoomId)
-          .eq('status', 'accepted');
-        
-        let adminId = session.user.id;
-        if (members && members.length > 0) {
-          const hasUs = members.some(m => m.user_id === session.user.id);
-          if (!hasUs) {
-            adminId = members[0].user_id;
-          }
-        }
-
-        const initialRent = '12000';
-        const tx = {
-          user_id: adminId,
-          room_id: currentRoomId,
-          category: 'System',
-          amount: parseFloat(initialRent),
-          merchant: 'AdminConfig',
-          note: `admin_id:${adminId}`,
-          is_shared: true,
-          logged_by: 'System',
-          date: '2000-01-01'
-        };
-
-        try {
-          await supabase.from('transactions').insert(tx);
-          await fetchTransactions(session.user.id, currentRoomId);
-        } catch (e) {
-          console.error("Failed to auto-create AdminConfig:", e);
-        }
-      };
-      
-      initAdminConfig();
-    }
-  }, [currentRoomId, transactions, session, loading]);
 
   // --- Transactions Logging ---
   const addTransaction = async (e) => {
@@ -1675,7 +1631,7 @@ export default function PersonalLedger() {
     }
   };
   const handleEditClick = (tx) => {
-    setEditingTxId(tx.id);
+    setEditingTxId(tx.id.replace('-split', ''));
     setForm({
       date: tx.date,
       category: tx.category,
