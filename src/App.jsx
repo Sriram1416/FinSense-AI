@@ -495,7 +495,7 @@ export default function PersonalLedger() {
       const allMembers = [
         ...(currentUser && currentUser.joined_at ? [{ id: session?.user?.id, joined_at: currentUser.joined_at }] : []),
         ...roommates.map(r => ({ id: r.id, joined_at: r.joined_at }))
-      ].filter(m => m.joined_at);
+      ].filter(m => m.joined_at && !m.joined_at.startsWith('1970'));
       if (allMembers.length > 0) {
         allMembers.sort((a, b) => new Date(a.joined_at) - new Date(b.joined_at));
         return allMembers[0].id;
@@ -980,6 +980,24 @@ export default function PersonalLedger() {
         });
       
       if (mErr) throw mErr;
+
+      // 3. Create initial AdminConfig transaction to designate creator as admin
+      try {
+        const tx = {
+          user_id: session.user.id,
+          room_id: room.id,
+          category: 'System',
+          amount: 12000,
+          merchant: 'AdminConfig',
+          note: `admin_id:${session.user.id}`,
+          is_shared: true,
+          logged_by: 'System',
+          date: '2000-01-01'
+        };
+        await supabase.from('transactions').insert(tx);
+      } catch (adminErr) {
+        console.error("Failed to insert initial AdminConfig:", adminErr);
+      }
 
       setCurrentRoomId(room.id);
       setCurrentRoomCode(inviteCode);
