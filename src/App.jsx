@@ -1939,20 +1939,16 @@ export default function PersonalLedger() {
         if (tx.date.slice(0, 7) === curMonthStr) monthlyRoomExpense += tx.amount;
 
         const payer = tx.logged_by;
-        // Use per-tx split count (supports partial-presence splits)
-        const txSplitCount = tx.splitCount && tx.splitCount > 0 ? tx.splitCount : N;
-        const txShare = tx.amount / txSplitCount; // share per present person
+        const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
+        const activeDivisor = included.length > 0 ? included.length : 1;
+        const txShare = tx.amount / activeDivisor;
 
         if (totalPaidMap[payer] !== undefined) {
           totalPaidMap[payer] += tx.amount;
           txCountMap[payer] = (txCountMap[payer] || 0) + 1;
         }
-        // Every member owes their share (only if split covers full group we charge all,
-        // partial split tags mean fewer people share — for simplicity we distribute equally
-        // among txSplitCount members. We approximate by charging all N members txShare
-        // weighted by presence ratio, but the fairest approach: charge each member txShare
-        // and leave extra to the payer's benefit).
-        memberNames.forEach(name => {
+
+        included.forEach(name => {
           if (memberOwedMap[name] !== undefined) {
             memberOwedMap[name] += txShare;
           }
@@ -3079,13 +3075,14 @@ export default function PersonalLedger() {
       filtered.forEach(t => {
         totalRoomExpense += Number(t.amount);
         const payer = t.logged_by;
-        const txSplitCount = t.splitCount && t.splitCount > 0 ? t.splitCount : N;
-        const txShare = Number(t.amount) / txSplitCount;
+        const included = getIncludedMembersForTx(t, memberNames, roommates, currentUser);
+        const activeDivisor = included.length > 0 ? included.length : 1;
+        const txShare = Number(t.amount) / activeDivisor;
 
         if (totalPaidMap[payer] !== undefined) {
           totalPaidMap[payer] += Number(t.amount);
         }
-        memberNames.forEach(name => {
+        included.forEach(name => {
           if (memberOwedMap[name] !== undefined) {
             memberOwedMap[name] += txShare;
           }
@@ -3204,10 +3201,13 @@ export default function PersonalLedger() {
       ];
 
       filtered.forEach(t => {
-        const txSplitCount = t.splitCount && t.splitCount > 0 ? t.splitCount : N;
-        const isPartial = t.splitCount && t.splitCount > 0;
-        const splitModeStr = isPartial ? `Split by ${txSplitCount} members` : `Split by all (${N} members)`;
-        const txShare = Number(t.amount) / txSplitCount;
+        const included = getIncludedMembersForTx(t, memberNames, roommates, currentUser);
+        const activeDivisor = included.length > 0 ? included.length : 1;
+        const isPartial = t.splitMembers ? t.splitMembers.length < memberNames.length : (t.splitCount && t.splitCount > 0);
+        const splitModeStr = isPartial ? `Split by ${activeDivisor} members` : `Split by all (${N} members)`;
+        
+        const isUserIncluded = included.includes(currentUser?.name);
+        const txShare = isUserIncluded ? (Number(t.amount) / activeDivisor) : 0;
         
         txRows.push([
           t.date,
@@ -5785,9 +5785,10 @@ export default function PersonalLedger() {
                                     {analysisType === 'roommates' && tx.is_shared && !tx.merchant.startsWith('Settle:') && (
                                       <div className="mt-1 pt-2 border-t border-dashed border-slate-200 text-[10px] text-slate-600">
                                         {(() => {
-                                          const sc = getSplitCount(tx);
                                           const allM = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
-                                          const isPartial = sc < allM.length;
+                                          const included = getIncludedMembersForTx(tx, allM, roommates, currentUser);
+                                          const sc = included.length > 0 ? included.length : 1;
+                                          const isPartial = included.length < allM.length;
                                           return (
                                             <>
                                               <div className={`flex justify-between font-bold mb-1 p-1.5 rounded ${
@@ -5800,12 +5801,20 @@ export default function PersonalLedger() {
                                                 <span className="text-emerald-700">₹{Math.round(tx.amount / sc)} / head</span>
                                               </div>
                                               <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 font-mono text-[9px] mt-1 bg-slate-900/5 p-1.5 rounded">
-                                                {allM.map((name, i) => (
-                                                  <div key={i} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
-                                                    <span className="text-slate-500 truncate">{name === tx.logged_by ? `${name} (Payer)` : name}:</span>
-                                                    <span className="font-bold text-slate-800">₹{Math.round(tx.amount / sc)}</span>
-                                                  </div>
-                                                ))}
+                                                {allM.map((name, i) => {
+                                                  const isIncluded = included.includes(name);
+                                                  const shareVal = isIncluded ? Math.round(tx.amount / sc) : 0;
+                                                  return (
+                                                    <div key={i} className="flex justify-between border-b pb-0.5" style={{ borderColor: 'var(--rule)' }}>
+                                                      <span className={`truncate ${isIncluded ? 'text-slate-500' : 'text-slate-400 line-through font-normal'}`}>
+                                                        {name === tx.logged_by ? `${name} (Payer)` : name}:
+                                                      </span>
+                                                      <span className={`font-bold ${isIncluded ? 'text-slate-800' : 'text-slate-400'}`}>
+                                                        {isIncluded ? `₹${shareVal}` : 'Excluded'}
+                                                      </span>
+                                                    </div>
+                                                  );
+                                                })}
                                               </div>
                                             </>
                                           );
@@ -7124,6 +7133,75 @@ export default function PersonalLedger() {
                 </div>
               )}
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Approve Roommate Split Strategy Modal */}
+      {isApproveConfirmOpen && (
+        <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="room-card max-w-sm w-full rounded-lg p-5 space-y-4" style={{ background: 'var(--card)', border: '1px solid var(--rule)' }}>
+            <div className="flex justify-between items-center border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+              <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--stamp)]">Approve Roommate</h3>
+              <button
+                onClick={() => {
+                  setIsApproveConfirmOpen(false);
+                  setPendingApproveUserId(null);
+                  setPendingApproveName('');
+                }}
+                className="text-xs font-bold text-slate-400 hover:text-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-3.5 text-xs">
+              <p className="text-slate-800 leading-relaxed font-medium">
+                You are approving <strong className="text-[var(--ink)]">{pendingApproveName}</strong> to join the flat.
+              </p>
+              
+              <div className="p-3 bg-amber-600/5 rounded border border-amber-500/20 space-y-2">
+                <p className="font-bold text-[9px] uppercase tracking-wider text-amber-800">
+                  ⚠️ Choose past expenses split strategy:
+                </p>
+                <p className="text-[10px] text-slate-600 leading-relaxed">
+                  How should we calculate roommate split balances for shared expenses logged before they joined?
+                </p>
+              </div>
+
+              {roomLoading ? (
+                <div className="text-xs text-center text-slate-500 py-2">Processing roommate approval...</div>
+              ) : (
+                <div className="flex flex-col gap-2 pt-2">
+                  <button
+                    onClick={() => executeApproveRoommate(pendingApproveUserId, false)}
+                    className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
+                    style={{ backgroundColor: 'var(--positive)' }}
+                  >
+                    No, Only Future Splits (Recommended)
+                  </button>
+                  <button
+                    onClick={() => executeApproveRoommate(pendingApproveUserId, true)}
+                    className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
+                    style={{ backgroundColor: 'var(--ink)' }}
+                  >
+                    Yes, Split Past Expenses Retroactively
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsApproveConfirmOpen(false);
+                      setPendingApproveUserId(null);
+                      setPendingApproveName('');
+                    }}
+                    className="w-full py-2 border rounded font-semibold text-slate-600 hover:bg-slate-100 text-center transition-all"
+                    style={{ borderColor: 'var(--rule)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
