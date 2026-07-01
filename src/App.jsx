@@ -411,6 +411,19 @@ const renderAvatar = (avatar, name, sizeClass = "w-6 h-6 text-[10px]") => {
     </div>
   );
 };
+const getIncludedMembersForTx = (tx, memberNames, roommates, currentUser) => {
+  if (tx.splitMembers && tx.splitMembers.length > 0) {
+    return memberNames.filter(name => tx.splitMembers.includes(name));
+  }
+  return memberNames.filter(name => {
+    const profile = (currentUser?.name === name) ? currentUser : roommates.find(r => r.name === name);
+    if (profile && profile.joined_at && tx.date) {
+      const joinedDateStr = profile.joined_at.slice(0, 10);
+      if (tx.date < joinedDateStr) return false;
+    }
+    return true;
+  });
+};
 
 export default function PersonalLedger() {
   // --- Supabase Session State ---
