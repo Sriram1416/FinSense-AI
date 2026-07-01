@@ -5436,6 +5436,15 @@ export default function PersonalLedger() {
                                           </div>
                                           <div className="flex items-center gap-3 flex-shrink-0">
                                             <span className="font-bold text-xs font-mono text-slate-900">{fmt(tx.amount)}</span>
+                                            {tx.source === 'manual' && (
+                                              <button
+                                                onClick={() => handleEditClick(tx)}
+                                                aria-label="Edit"
+                                                className="text-slate-500 hover:text-slate-700 transition"
+                                              >
+                                                <Icons.Edit className="w-3.5 h-3.5" />
+                                              </button>
+                                            )}
                                             <button onClick={() => deleteTransaction(tx.id.replace('-split', ''))} aria-label="Delete" className="text-red-600 hover:text-red-800 transition">
                                               <Icons.Trash className="w-3.5 h-3.5" />
                                             </button>
@@ -5820,6 +5829,15 @@ export default function PersonalLedger() {
                                       </div>
                                       <div className="flex items-center gap-3 flex-shrink-0">
                                         <span className="font-bold text-xs font-mono text-slate-900">{fmt(tx.amount)}</span>
+                                        {tx.source === 'manual' && (
+                                          <button
+                                            onClick={() => handleEditClick(tx)}
+                                            aria-label="Edit"
+                                            className="text-slate-500 hover:text-slate-700 transition"
+                                          >
+                                            <Icons.Edit className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
                                         <button onClick={() => deleteTransaction(tx.id.replace('-split', ''))} aria-label="Delete" className="text-red-600 hover:text-red-800 transition">
                                           <Icons.Trash className="w-3.5 h-3.5" />
                                         </button>
