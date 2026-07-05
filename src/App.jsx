@@ -468,6 +468,8 @@ export default function PersonalLedger() {
   const [pendingApproveUserId, setPendingApproveUserId] = useState(null);
   const [pendingApproveName, setPendingApproveName] = useState('');
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
+  const [showPartialSplitSelector, setShowPartialSplitSelector] = useState(false);
+  const [selectedPastTxIds, setSelectedPastTxIds] = useState([]);
 
   // --- Core Financial States ---
   const [salary, setSalary] = useState(50000); 
@@ -529,6 +531,12 @@ export default function PersonalLedger() {
   const shouldInjectRent = useMemo(() => {
     return !rentTxLogged && activeRentAmount > 0;
   }, [rentTxLogged, activeRentAmount]);
+
+  const pastSharedTxs = useMemo(() => {
+    return transactions
+      .filter(t => t.is_shared)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  }, [transactions]);
   
   // --- Transaction Form ---
   const [form, setForm] = useState({
@@ -1367,28 +1375,64 @@ export default function PersonalLedger() {
     setIsApproveConfirmOpen(true);
   };
 
-  const executeApproveRoommate = async (roommateUserId, splitPast) => {
+  const executeApproveRoommate = async (roommateUserId, strategy, selectedTxIds = []) => {
     if (!currentRoomId) return;
     setRoomLoading(true);
     try {
-      const updateData = { 
-        status: 'accepted',
-        created_at: splitPast ? '1970-01-01T00:00:00Z' : new Date().toISOString()
-      };
+      // 1. Determine join date based on strategy
+      // - If 'all', set to '1970-01-01T00:00:00Z' (includes them in all past splits by date check)
+      // - Otherwise, set to now (excludes them from past splits by date check by default)
+      const joinDate = (strategy === 'all') ? '1970-01-01T00:00:00Z' : new Date().toISOString();
       
-      const { error } = await supabase
+      const { error: memberErr } = await supabase
         .from('room_members')
-        .update(updateData)
+        .update({ status: 'accepted', created_at: joinDate })
         .match({ room_id: currentRoomId, user_id: roommateUserId });
-      
-      if (error) throw error;
+
+      if (memberErr) throw memberErr;
+
+      // 2. If 'partial' strategy and transactions are chosen:
+      if (strategy === 'partial' && selectedTxIds.length > 0) {
+        // Resolve roommate name
+        const rm = pendingMembers.find(m => m.id === roommateUserId);
+        const newRoommateName = rm ? rm.name : 'Roommate';
+
+        // Filter selected transactions from local state
+        const txsToUpdate = transactions.filter(t => selectedTxIds.includes(t.id));
+
+        for (const tx of txsToUpdate) {
+          // Get currently included members for this transaction
+          const memberNames = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
+          const currentlyIncluded = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
+
+          // Construct new split tags
+          const cleanNote = tx.note
+            ? tx.note.replace(/\[source:\w+\]/g, '').replace(/\[split:[^\]]+\]/g, '').trim()
+            : '';
+          
+          const newSplitNames = [...currentlyIncluded, newRoommateName];
+          const newSplitTag = `[split:${newSplitNames.join(',')}]`;
+          const newSourceTag = `[source:${tx.source || 'manual'}]`;
+          const updatedNote = `${cleanNote} ${newSplitTag} ${newSourceTag}`.trim();
+
+          const { error: txErr } = await supabase
+            .from('transactions')
+            .update({ note: updatedNote })
+            .eq('id', tx.id);
+
+          if (txErr) console.warn("Failed to update splits for transaction:", tx.id, txErr);
+        }
+      }
+
       showToast('success', `${pendingApproveName} approved successfully!`);
       setIsApproveConfirmOpen(false);
       setPendingApproveUserId(null);
       setPendingApproveName('');
+      setShowPartialSplitSelector(false);
+      setSelectedPastTxIds([]);
       await fetchRoommatesAndTransactions(session.user.id, currentRoomId);
     } catch (e) {
-      showToast('error', 'Error approving request.');
+      showToast('error', 'Error approving roommate.');
     } finally {
       setRoomLoading(false);
     }
@@ -7216,6 +7260,8 @@ export default function PersonalLedger() {
                   setIsApproveConfirmOpen(false);
                   setPendingApproveUserId(null);
                   setPendingApproveName('');
+                  setShowPartialSplitSelector(false);
+                  setSelectedPastTxIds([]);
                 }}
                 className="text-xs font-bold text-slate-400 hover:text-slate-800"
               >
@@ -7227,47 +7273,118 @@ export default function PersonalLedger() {
               <p className="text-slate-800 leading-relaxed font-medium">
                 You are approving <strong className="text-[var(--ink)]">{pendingApproveName}</strong> to join the flat.
               </p>
-              
-              <div className="p-3 bg-amber-600/5 rounded border border-amber-500/20 space-y-2">
-                <p className="font-bold text-[9px] uppercase tracking-wider text-amber-800">
-                  ⚠️ Choose past expenses split strategy:
-                </p>
-                <p className="text-[10px] text-slate-600 leading-relaxed">
-                  How should we calculate roommate split balances for shared expenses logged before they joined?
-                </p>
-              </div>
 
               {roomLoading ? (
-                <div className="text-xs text-center text-slate-500 py-2">Processing roommate approval...</div>
+                <div className="text-xs text-center text-slate-500 py-4">Processing roommate approval...</div>
+              ) : !showPartialSplitSelector ? (
+                <>
+                  <div className="p-3 bg-amber-600/5 rounded border border-amber-500/20 space-y-2">
+                    <p className="font-bold text-[9px] uppercase tracking-wider text-amber-800">
+                      ⚠️ Choose past expenses split strategy:
+                    </p>
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      How should we calculate roommate split balances for shared expenses logged before they joined?
+                    </p>
+                  </div>
+                  
+                  <div className="flex flex-col gap-2 pt-2">
+                    <button
+                      onClick={() => executeApproveRoommate(pendingApproveUserId, 'all')}
+                      className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
+                      style={{ backgroundColor: 'var(--positive)' }}
+                    >
+                      Equal Share of All Past Txs
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowPartialSplitSelector(true);
+                        setSelectedPastTxIds([]);
+                      }}
+                      className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
+                      style={{ backgroundColor: '#2563EB' }}
+                    >
+                      Partial Split of Past Txs
+                    </button>
+                    <button
+                      onClick={() => executeApproveRoommate(pendingApproveUserId, 'none')}
+                      className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
+                      style={{ backgroundColor: 'var(--ink)' }}
+                    >
+                      Nothing (Only Future Splits)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsApproveConfirmOpen(false);
+                        setPendingApproveUserId(null);
+                        setPendingApproveName('');
+                      }}
+                      className="w-full py-2 border rounded font-semibold text-slate-600 hover:bg-slate-100 text-center transition-all"
+                      style={{ borderColor: 'var(--rule)' }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
               ) : (
-                <div className="flex flex-col gap-2 pt-2">
-                  <button
-                    onClick={() => executeApproveRoommate(pendingApproveUserId, false)}
-                    className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
-                    style={{ backgroundColor: 'var(--positive)' }}
-                  >
-                    No, Only Future Splits (Recommended)
-                  </button>
-                  <button
-                    onClick={() => executeApproveRoommate(pendingApproveUserId, true)}
-                    className="w-full py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
-                    style={{ backgroundColor: 'var(--ink)' }}
-                  >
-                    Yes, Split Past Expenses Retroactively
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsApproveConfirmOpen(false);
-                      setPendingApproveUserId(null);
-                      setPendingApproveName('');
-                    }}
-                    className="w-full py-2 border rounded font-semibold text-slate-600 hover:bg-slate-100 text-center transition-all"
-                    style={{ borderColor: 'var(--rule)' }}
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <>
+                  <div className="p-3 bg-blue-600/5 rounded border border-blue-500/20 space-y-2">
+                    <p className="font-bold text-[9px] uppercase tracking-wider text-blue-800">
+                      📝 Select transactions to split:
+                    </p>
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      Tick the past shared expenses you want <strong className="text-slate-900">{pendingApproveName}</strong> to participate in.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1 border rounded p-2 bg-slate-900/5" style={{ borderColor: 'var(--rule)' }}>
+                    {pastSharedTxs.length === 0 ? (
+                      <p className="text-[10px] text-slate-500 text-center py-4">No past shared transactions found.</p>
+                    ) : (
+                      pastSharedTxs.map(tx => {
+                        const isChecked = selectedPastTxIds.includes(tx.id);
+                        return (
+                          <label key={tx.id} className="flex items-start gap-2.5 p-2 bg-white rounded border hover:shadow-2xs transition-all cursor-pointer select-none text-[11px] text-slate-800" style={{ borderColor: 'var(--rule)' }}>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => setSelectedPastTxIds(prev => prev.includes(tx.id) ? prev.filter(id => id !== tx.id) : [...prev, tx.id])}
+                              className="mt-0.5"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex justify-between font-bold text-slate-900">
+                                <span className="truncate">{tx.merchant || 'Shared Expense'}</span>
+                                <span className="font-mono text-[var(--stamp)]">{fmt(tx.amount)}</span>
+                              </div>
+                              <div className="flex justify-between text-[9px] text-slate-500 mt-0.5">
+                                <span>{tx.date} | {tx.category}</span>
+                                <span className="italic truncate max-w-[120px]">{tx.note}</span>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      onClick={() => executeApproveRoommate(pendingApproveUserId, 'partial', selectedPastTxIds)}
+                      className="flex-1 py-2.5 text-white font-bold rounded text-xs transition-all text-center shadow-xs"
+                      style={{ backgroundColor: 'var(--positive)' }}
+                    >
+                      Approve & Apply ({selectedPastTxIds.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowPartialSplitSelector(false)}
+                      className="flex-1 py-2.5 border rounded font-semibold text-slate-600 hover:bg-slate-100 text-center transition-all"
+                      style={{ borderColor: 'var(--rule)' }}
+                    >
+                      Back
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           </div>
