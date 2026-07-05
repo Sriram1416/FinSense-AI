@@ -424,6 +424,22 @@ const getIncludedMembersForTx = (tx, memberNames, roommates, currentUser) => {
     return true;
   });
 };
+const resolvePayerName = (tx, memberNames, roommates, currentUser, roomAdminId) => {
+  let payer = tx.logged_by;
+  if (memberNames.includes(payer)) return payer;
+  
+  // Try to find by user_id
+  const foundMember = roommates.find(r => r.id === tx.user_id);
+  if (foundMember) return foundMember.name;
+  
+  if (tx.user_id === currentUser?.id) {
+    return currentUser?.name || 'Sriram';
+  }
+  
+  // Default to room admin if generic or system transaction
+  const adminProfile = roommates.find(r => r.id === roomAdminId);
+  return adminProfile ? adminProfile.name : (currentUser?.name || 'Sriram');
+};
 
 export default function PersonalLedger() {
   // --- Supabase Session State ---
@@ -2052,7 +2068,7 @@ export default function PersonalLedger() {
         if (tx.date >= startOfWeekStr) weeklyRoomExpense += tx.amount;
         if (tx.date.slice(0, 7) === curMonthStr) monthlyRoomExpense += tx.amount;
 
-        const payer = tx.logged_by;
+        const payer = resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
         const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
         const activeDivisor = included.length > 0 ? included.length : 1;
         const txShare = tx.amount / activeDivisor;
@@ -3188,7 +3204,7 @@ export default function PersonalLedger() {
       let totalRoomExpense = 0;
       filtered.forEach(t => {
         totalRoomExpense += Number(t.amount);
-        const payer = t.logged_by;
+        const payer = resolvePayerName(t, memberNames, roommates, currentUser, roomAdminId);
         const included = getIncludedMembersForTx(t, memberNames, roommates, currentUser);
         const activeDivisor = included.length > 0 ? included.length : 1;
         const txShare = Number(t.amount) / activeDivisor;
