@@ -838,7 +838,7 @@ export default function PersonalLedger() {
       // Update current user's join date from members list
       const myRecord = members.find(m => m.user_id === userId);
       if (myRecord) {
-        setCurrentUser(prev => prev ? { ...prev, joined_at: myRecord.created_at } : null);
+        setCurrentUser(prev => prev ? { ...prev, joined_at: myRecord.joined_at } : null);
       }
 
       const roommatesList = members
@@ -850,7 +850,7 @@ export default function PersonalLedger() {
             name: prof.name || 'Roommate',
             email: prof.email || '',
             avatar: prof.avatar || null,
-            joined_at: m.created_at
+            joined_at: m.joined_at
           };
         });
       setRoommates(roommatesList);
@@ -1386,7 +1386,7 @@ export default function PersonalLedger() {
       
       const { error: memberErr } = await supabase
         .from('room_members')
-        .update({ status: 'accepted', created_at: joinDate })
+        .update({ status: 'accepted', joined_at: joinDate })
         .match({ room_id: currentRoomId, user_id: roommateUserId });
 
       if (memberErr) throw memberErr;
