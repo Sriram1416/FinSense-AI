@@ -415,7 +415,9 @@ const getIncludedMembersForTx = (tx, memberNames, roommates, currentUser) => {
   if (tx.splitMembers && tx.splitMembers.length > 0) {
     return memberNames.filter(name => tx.splitMembers.includes(name));
   }
+  const payerName = tx.logged_by;
   return memberNames.filter(name => {
+    if (name === payerName) return true;
     const profile = (currentUser?.name === name) ? currentUser : roommates.find(r => r.name === name);
     if (profile && profile.joined_at && tx.date) {
       const joinedDateStr = profile.joined_at.slice(0, 10);
@@ -1001,7 +1003,8 @@ export default function PersonalLedger() {
         .insert({
           room_id: room.id,
           user_id: session.user.id,
-          status: 'accepted'
+          status: 'accepted',
+          joined_at: '1970-01-01T00:00:00Z'
         });
       
       if (mErr) throw mErr;
@@ -1652,16 +1655,12 @@ export default function PersonalLedger() {
     // Append source metadata + optional split count to note
     const noteText = form.note.trim();
     const allMembers = [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean);
-    // Determine present member count (only relevant for shared expenses)
-    let splitN = allMembers.length; // default: all members
-    if (form.isShared && form.presentMembers !== null && Array.isArray(form.presentMembers)) {
-      splitN = form.presentMembers.length;
-    }
-    if (form.isShared && splitN <= 0) {
+    const splitNames = form.isShared ? (form.presentMembers ?? allMembers) : [];
+    if (form.isShared && splitNames.length <= 0) {
       showToast('error', 'Select at least 1 person to split with.');
       return;
     }
-    const splitTag = (form.isShared && splitN < allMembers.length) ? ` [split:${splitN}]` : '';
+    const splitTag = form.isShared ? ` [split:${splitNames.join(',')}]` : '';
     const noteWithSource = noteText
       ? `${noteText} [source:${form.source || 'manual'}]${splitTag}`
       : `[source:${form.source || 'manual'}]${splitTag}`;
@@ -1703,7 +1702,7 @@ export default function PersonalLedger() {
           console.error('addTransaction Supabase insert error details:', error);
           throw error;
         }
-        showToast('success', `Logged ${fmt(amt)} — split among ${splitN} people`);
+        showToast('success', form.isShared ? `Logged ${fmt(amt)} — split among ${splitNames.length} people` : `Logged personal expense of ${fmt(amt)}`);
       }
 
       await fetchTransactions(session.user.id, currentRoomId);
