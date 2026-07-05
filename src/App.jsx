@@ -470,6 +470,7 @@ export default function PersonalLedger() {
   const [isApproveConfirmOpen, setIsApproveConfirmOpen] = useState(false);
   const [showPartialSplitSelector, setShowPartialSplitSelector] = useState(false);
   const [selectedPastTxIds, setSelectedPastTxIds] = useState([]);
+  const [editingTxId, setEditingTxId] = useState(null);
 
   // --- Core Financial States ---
   const [salary, setSalary] = useState(50000); 
@@ -1657,7 +1658,7 @@ export default function PersonalLedger() {
     }
 
     const newTx = {
-      user_id: payerId,
+      user_id: session.user.id, // Always set user_id to logging user to satisfy RLS insertion policies
       ...(form.isShared && { room_id: currentRoomId }),
       category: form.category,
       amount: amt,
@@ -1669,13 +1670,26 @@ export default function PersonalLedger() {
     };
 
     try {
-      const { error } = await supabase.from('transactions').insert(newTx);
-      if (error) {
-        console.error('addTransaction Supabase insert error details:', error);
-        throw error;
+      if (editingTxId) {
+        const { error } = await supabase
+          .from('transactions')
+          .update(newTx)
+          .eq('id', editingTxId);
+        if (error) {
+          console.error('updateTransaction Supabase error details:', error);
+          throw error;
+        }
+        showToast('success', 'Transaction updated successfully!');
+        setEditingTxId(null);
+      } else {
+        const { error } = await supabase.from('transactions').insert(newTx);
+        if (error) {
+          console.error('addTransaction Supabase insert error details:', error);
+          throw error;
+        }
+        showToast('success', `Logged ${fmt(amt)} — split among ${splitN} people`);
       }
 
-      showToast('success', `Logged ${fmt(amt)} — split among ${splitN} people`);
       await fetchTransactions(session.user.id, currentRoomId);
 
       setForm({
@@ -1693,6 +1707,12 @@ export default function PersonalLedger() {
     }
   };
   const handleEditClick = (tx) => {
+    let resolvedPaidById = session.user.id;
+    if (tx.logged_by !== currentUser?.name) {
+      const found = roommates.find(r => r.name === tx.logged_by);
+      if (found) resolvedPaidById = found.id;
+    }
+
     setEditingTxId(tx.id.replace('-split', ''));
     setForm({
       date: tx.date,
@@ -1703,7 +1723,7 @@ export default function PersonalLedger() {
       source: tx.source || 'manual',
       isShared: tx.is_shared,
       presentMembers: tx.splitMembers || null,
-      paidById: tx.user_id
+      paidById: resolvedPaidById
     });
     setAnalysisType(tx.is_shared ? 'roommates' : 'personal');
     setActiveTab('transactions');
@@ -5524,7 +5544,9 @@ export default function PersonalLedger() {
               
               {/* Detailed Form */}
               <div className="blur-card rounded p-5 lg:col-span-1">
-                <h3 className="font-bold text-xs mb-3 text-slate-900 uppercase tracking-wider">Log Ledger Expense</h3>
+                <h3 className="font-bold text-xs mb-3 text-slate-900 uppercase tracking-wider">
+                  {editingTxId ? '📝 Edit Transaction' : 'Log Ledger Expense'}
+                </h3>
                 <form onSubmit={addTransaction} className="space-y-3.5">
                   <div className="flex flex-col">
                     <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Date</label>
@@ -5677,9 +5699,33 @@ export default function PersonalLedger() {
                     </div>
                   )}
 
-                  <button type="submit" className="w-full btn-vintage-ink">
-                    Add Transaction
-                  </button>
+                  <div className="flex gap-2">
+                    <button type="submit" className="flex-1 btn-vintage-ink">
+                      {editingTxId ? "Update" : "Add Transaction"}
+                    </button>
+                    {editingTxId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingTxId(null);
+                          setForm({
+                            ...form,
+                            amount: '',
+                            merchant: '',
+                            note: '',
+                            source: 'manual',
+                            isShared: false,
+                            paidById: session.user.id,
+                            presentMembers: null
+                          });
+                        }}
+                        className="flex-1 py-2 border rounded font-semibold text-slate-600 hover:bg-slate-100 text-center transition-all text-xs"
+                        style={{ borderColor: 'var(--rule)' }}
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
                 </form>
               </div>
 
