@@ -48,17 +48,17 @@ const COLORS = {
 // Theme Config definitions
 const THEMES = {
   cocoa: {
-    name: 'White & Brown Cocoa',
-    paper: '#F5EFE6',
-    paperDeep: '#EDE0D0',
+    name: 'White & Brown',
+    paper: '#FFFFFF',
+    paperDeep: '#F8F5F0',
     card: '#FFFFFF',
-    ink: '#3B1F0A',
+    ink: '#3D1F00',
     inkSoft: '#7C5B3A',
-    rule: '#D4B896',
+    rule: '#E8DEC9',
     stamp: '#B5451B',
-    positive: '#3A6B35',
-    border: '#D4B896',
-    accent: '#8B4513'
+    positive: '#2E7D32',
+    border: '#E8DEC9',
+    accent: '#7B4F2E'
   },
   beige: {
     name: 'Vintage Beige Paper',
@@ -761,7 +761,7 @@ export default function PersonalLedger() {
           const parsed = JSON.parse(s.value);
           setSalary(parsed.salary || 50000);
           setSalaryInput(String(parsed.salary || 50000));
-          if (parsed.themeMode) setThemeMode(parsed.themeMode);
+          if (parsed.themeMode) setThemeMode(parsed.themeMode === 'beige' ? 'cocoa' : parsed.themeMode);
           if (parsed.fontFamily) setFontFamily(parsed.fontFamily);
           if (parsed.fontSize) setFontSize(parsed.fontSize);
           if (parsed.layoutDensity) setLayoutDensity(parsed.layoutDensity);
