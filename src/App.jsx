@@ -47,6 +47,19 @@ const COLORS = {
 
 // Theme Config definitions
 const THEMES = {
+  cocoa: {
+    name: 'White & Brown Cocoa',
+    paper: '#F5EFE6',
+    paperDeep: '#EDE0D0',
+    card: '#FFFFFF',
+    ink: '#3B1F0A',
+    inkSoft: '#7C5B3A',
+    rule: '#D4B896',
+    stamp: '#B5451B',
+    positive: '#3A6B35',
+    border: '#D4B896',
+    accent: '#8B4513'
+  },
   beige: {
     name: 'Vintage Beige Paper',
     paper: '#E7DCC2',
@@ -457,7 +470,7 @@ export default function PersonalLedger() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [analysisType, setAnalysisType] = useState('personal'); 
-  const [themeMode, setThemeMode] = useState('beige'); // 'beige', 'dark', 'light', 'emerald', 'royal'
+  const [themeMode, setThemeMode] = useState('cocoa'); // 'cocoa', 'beige', 'dark', 'light', 'emerald', 'royal'
   const [fontFamily, setFontFamily] = useState('sans'); // 'sans', 'serif', 'mono'
   const [fontSize, setFontSize] = useState('medium'); // 'small', 'medium', 'large'
   const [layoutDensity, setLayoutDensity] = useState('tight'); // 'tight', 'standard'
@@ -4446,7 +4459,7 @@ export default function PersonalLedger() {
       <div className="perforation hidden md:block" />
 
       {/* Main Content */}
-      <main className="flex-1 p-5 md:p-8 flex flex-col justify-between bg-[var(--card)] min-w-0">
+      <main className="flex-1 p-5 md:p-8 pb-24 md:pb-8 flex flex-col justify-between bg-[var(--card)] min-w-0">
         
         {/* Header & Mode Switcher */}
           <div className="flex flex-col md:flex-row md:items-center justify-between pb-4 mb-6 border-b gap-4" style={{ borderColor: 'var(--rule)' }}>
@@ -7218,9 +7231,9 @@ export default function PersonalLedger() {
       {/* Profile Settings Modal */}
       {isProfileSettingsOpen && (
         <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="room-card max-w-sm w-full rounded-lg p-5 space-y-4" style={{ background: 'var(--card)', border: '1px solid var(--rule)' }}>
+          <div className="room-card max-w-sm w-full rounded-lg p-5 space-y-4 max-h-[90vh] overflow-y-auto" style={{ background: 'var(--card)', border: '1px solid var(--rule)' }}>
             <div className="flex justify-between items-center border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
-              <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)]">Profile Settings</h3>
+              <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)]">⚙️ Visual Preferences</h3>
               <button onClick={() => setIsProfileSettingsOpen(false)} className="text-xs font-bold text-slate-400 hover:text-slate-800">✕</button>
             </div>
             
@@ -7247,37 +7260,91 @@ export default function PersonalLedger() {
               {/* Avatar Options Selection */}
               <div className="space-y-2">
                 <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">Choose Avatar</label>
-                
-                {/* Default Emojis */}
                 <div className="grid grid-cols-5 gap-1.5 p-1 bg-white/40 rounded border" style={{ borderColor: 'var(--rule)' }}>
                   {DEFAULT_AVATARS.map(av => {
                     const isSelected = profileAvatarInput === av.value;
                     return (
-                      <button
-                        key={av.id}
-                        type="button"
-                        onClick={() => setProfileAvatarInput(av.value)}
+                      <button key={av.id} type="button" onClick={() => setProfileAvatarInput(av.value)}
                         className={`p-1.5 text-lg rounded hover:bg-slate-200 transition-all ${isSelected ? 'bg-slate-200 border border-slate-400 scale-105 shadow-xs' : 'border border-transparent'}`}
-                        title={av.label}
-                      >
+                        title={av.label}>
                         {av.value}
                       </button>
                     );
                   })}
                 </div>
-
-                {/* Custom File Upload */}
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[9px] text-slate-500">Or upload a photo:</span>
                   <label className="cursor-pointer text-[10px] font-bold bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded border transition-all text-slate-700">
                     Choose Photo
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleProfileImageUpload}
-                      className="hidden"
-                    />
+                    <input type="file" accept="image/*" onChange={handleProfileImageUpload} className="hidden" />
                   </label>
+                </div>
+              </div>
+
+              {/* ── Theme Picker ── */}
+              <div className="space-y-2 pt-1 border-t" style={{ borderColor: 'var(--rule)' }}>
+                <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">🎨 Theme</label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {Object.entries(THEMES).map(([key, th]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => { setThemeMode(key); }}
+                      className={`flex items-center gap-2 p-2 rounded border text-left transition-all ${
+                        themeMode === key
+                          ? 'ring-2 ring-[var(--accent)] border-[var(--accent)] shadow-sm'
+                          : 'border-slate-200 hover:border-slate-400'
+                      }`}
+                      style={{ background: th.paper }}
+                    >
+                      <span className="w-4 h-4 rounded-full flex-shrink-0 border border-white/50" style={{ background: th.ink }} />
+                      <span className="text-[9px] font-bold truncate" style={{ color: th.ink }}>{th.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Font Style ── */}
+              <div className="space-y-2 border-t pt-1" style={{ borderColor: 'var(--rule)' }}>
+                <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">✍️ Font Style</label>
+                <div className="flex gap-1.5">
+                  {[['sans','Modern Sans'],['serif','Classic Serif'],['mono','Monospace']].map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setFontFamily(key)}
+                      className={`flex-1 py-1.5 rounded border text-[10px] font-bold transition-all ${
+                        fontFamily === key
+                          ? 'bg-[var(--ink)] text-[var(--card)] border-[var(--ink)]'
+                          : 'border-slate-200 text-slate-600 hover:border-slate-400'
+                      }`}
+                      style={key === 'serif' ? { fontFamily: 'Georgia, serif' } : key === 'mono' ? { fontFamily: 'monospace' } : {}}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Font Size ── */}
+              <div className="space-y-2 border-t pt-1" style={{ borderColor: 'var(--rule)' }}>
+                <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">🔡 Font Size</label>
+                <div className="flex gap-1.5">
+                  {[['small','Small'],['medium','Medium'],['large','Large']].map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setFontSize(key)}
+                      className={`flex-1 py-1.5 rounded border transition-all ${
+                        fontSize === key
+                          ? 'bg-[var(--ink)] text-[var(--card)] border-[var(--ink)] font-bold'
+                          : 'border-slate-200 text-slate-600 hover:border-slate-400'
+                      }`}
+                      style={{ fontSize: key === 'small' ? '9px' : key === 'large' ? '13px' : '11px' }}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -7285,8 +7352,8 @@ export default function PersonalLedger() {
                 <div className="text-xs text-center text-slate-500">Saving changes...</div>
               ) : (
                 <div className="flex gap-2 pt-2">
-                  <button type="submit" className="flex-1 btn-vintage-ink">Save Changes</button>
-                  <button type="button" onClick={() => setIsProfileSettingsOpen(false)} className="flex-1 btn-vintage-outline">Cancel</button>
+                  <button type="submit" className="flex-1 btn-vintage-ink">Save Profile</button>
+                  <button type="button" onClick={() => setIsProfileSettingsOpen(false)} className="flex-1 btn-vintage-outline">Close</button>
                 </div>
               )}
             </form>
@@ -7435,6 +7502,40 @@ export default function PersonalLedger() {
           </div>
         </div>
       )}
+
+      {/* ── Mobile Bottom Navigation Bar ── */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t" style={{ background: 'var(--paper-deep)', borderColor: 'var(--rule)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        {[
+          { id: 'dashboard', emoji: '🏠', label: 'Home' },
+          { id: 'transactions', emoji: '📒', label: 'Ledger' },
+          { id: 'waste', emoji: '📊', label: 'Spend' },
+          { id: 'goals', emoji: '👥', label: 'Goals' },
+        ].map(tab => {
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className="flex flex-col items-center justify-center gap-0.5 py-2.5 flex-1 transition-all duration-150 relative"
+              style={{ color: isActive ? 'var(--accent, var(--ink))' : 'var(--ink-soft)' }}
+            >
+              {isActive && (
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full" style={{ background: 'var(--accent, var(--ink))' }} />
+              )}
+              <span className={`text-2xl leading-none transition-transform duration-150 ${isActive ? 'scale-110' : 'scale-100'}`}>{tab.emoji}</span>
+              <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-50'}`}>{tab.label}</span>
+            </button>
+          );
+        })}
+        <button
+          onClick={() => { setProfileNameInput(currentUser?.name || ''); setProfileAvatarInput(currentUser?.avatar || ''); setIsProfileSettingsOpen(true); }}
+          className="flex flex-col items-center justify-center gap-0.5 py-2.5 flex-1 transition-all duration-150"
+          style={{ color: 'var(--ink-soft)' }}
+        >
+          <span className="text-2xl leading-none">⚙️</span>
+          <span className="text-[9px] font-bold uppercase tracking-wider opacity-50">Style</span>
+        </button>
+      </nav>
 
     </div>
   );
