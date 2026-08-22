@@ -7504,35 +7504,64 @@ export default function PersonalLedger() {
       )}
 
       {/* ── Mobile Bottom Navigation Bar ── */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t" style={{ background: 'var(--paper-deep)', borderColor: 'var(--rule)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t" style={{ background: 'var(--card)', borderColor: 'var(--rule)', boxShadow: '0 -4px 24px rgba(0,0,0,0.08)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
         {[
-          { id: 'dashboard', emoji: '🏠', label: 'Home' },
-          { id: 'transactions', emoji: '📒', label: 'Ledger' },
-          { id: 'waste', emoji: '📊', label: 'Spend' },
-          { id: 'goals', emoji: '👥', label: 'Goals' },
+          {
+            id: 'dashboard',
+            label: 'Home',
+            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>)
+          },
+          {
+            id: 'transactions',
+            label: 'Daily Expenses',
+            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 17h8v1H8v-1zm0-3h8v1H8v-1zm0-3h5v1H8v-1z"/></svg>)
+          },
+          {
+            id: 'waste',
+            label: 'Spend',
+            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zm5.6 8H19v6h-2.8v-6z"/></svg>)
+          },
+          {
+            id: 'goals',
+            label: 'Goals & Dues',
+            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>)
+          },
         ].map(tab => {
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className="flex flex-col items-center justify-center gap-0.5 py-2.5 flex-1 transition-all duration-150 relative"
+              className="flex flex-col items-center justify-center gap-1 py-3 flex-1 transition-all duration-200 relative"
               style={{ color: isActive ? 'var(--accent, var(--ink))' : 'var(--ink-soft)' }}
             >
               {isActive && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full" style={{ background: 'var(--accent, var(--ink))' }} />
+                <span
+                  className="absolute top-0 left-1/2 -translate-x-1/2 rounded-b-full transition-all duration-300"
+                  style={{ width: '36px', height: '3px', background: 'var(--accent, var(--ink))' }}
+                />
               )}
-              <span className={`text-2xl leading-none transition-transform duration-150 ${isActive ? 'scale-110' : 'scale-100'}`}>{tab.emoji}</span>
-              <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-50'}`}>{tab.label}</span>
+              <span
+                className="transition-all duration-200"
+                style={{
+                  transform: isActive ? 'scale(1.15)' : 'scale(1)',
+                  filter: isActive ? 'none' : 'opacity(0.5)'
+                }}
+              >
+                {tab.icon}
+              </span>
+              <span className="text-[9px] font-bold uppercase tracking-wider" style={{ opacity: isActive ? 1 : 0.5 }}>{tab.label}</span>
             </button>
           );
         })}
         <button
           onClick={() => { setProfileNameInput(currentUser?.name || ''); setProfileAvatarInput(currentUser?.avatar || ''); setIsProfileSettingsOpen(true); }}
-          className="flex flex-col items-center justify-center gap-0.5 py-2.5 flex-1 transition-all duration-150"
+          className="flex flex-col items-center justify-center gap-1 py-3 flex-1 transition-all duration-200"
           style={{ color: 'var(--ink-soft)' }}
         >
-          <span className="text-2xl leading-none">⚙️</span>
+          <span style={{ opacity: 0.5 }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
+          </span>
           <span className="text-[9px] font-bold uppercase tracking-wider opacity-50">Style</span>
         </button>
       </nav>
