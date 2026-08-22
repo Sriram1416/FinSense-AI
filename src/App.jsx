@@ -48,17 +48,17 @@ const COLORS = {
 // Theme Config definitions
 const THEMES = {
   cocoa: {
-    name: 'White & Brown',
-    paper: '#FAF7F4',
-    paperDeep: '#F0E9E0',
+    name: 'White & Brown Cocoa',
+    paper: '#F5EFE6',
+    paperDeep: '#EDE0D0',
     card: '#FFFFFF',
-    ink: '#3D1F00',
-    inkSoft: '#8B6347',
-    rule: '#D6C4AE',
+    ink: '#3B1F0A',
+    inkSoft: '#7C5B3A',
+    rule: '#D4B896',
     stamp: '#B5451B',
-    positive: '#2E7D32',
-    border: '#D6C4AE',
-    accent: '#7B4F2E'
+    positive: '#3A6B35',
+    border: '#D4B896',
+    accent: '#8B4513'
   },
   beige: {
     name: 'Vintage Beige Paper',
@@ -579,124 +579,10 @@ export default function PersonalLedger() {
     note: '',
     source: 'manual',
     isShared: false,
-    presentMembers: null,
+    presentMembers: null, // null = all members present; array of names = partial split
   });
-
-  // --- Voice Mic State ---
-  const [isListening, setIsListening] = useState(false);
-  const recognitionRef = React.useRef(null);
-
-  // NLP: parse spoken text → form fields
-  const parseVoiceInput = React.useCallback((text) => {
-    const raw = text.toLowerCase().trim();
-    const result = {};
-
-    // --- Date parsing ---
-    const today = new Date();
-    if (/\btoday\b/.test(raw)) {
-      result.date = isoDate(today);
-    } else if (/\byesterday\b/.test(raw)) {
-      const y = new Date(today); y.setDate(today.getDate() - 1);
-      result.date = isoDate(y);
-    } else {
-      // Match patterns like "3rd aug", "3 aug", "aug 3", "3/8", "03-08"
-      const MONTHS = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
-      const dmMatch = raw.match(/(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/);
-      const mdMatch = raw.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+(\d{1,2})/);
-      const numMatch = raw.match(/(\d{1,2})[\/-](\d{1,2})/);
-      if (dmMatch) {
-        const d = parseInt(dmMatch[1]), m = MONTHS[dmMatch[2]];
-        result.date = `${today.getFullYear()}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      } else if (mdMatch) {
-        const m = MONTHS[mdMatch[1]], d = parseInt(mdMatch[2]);
-        result.date = `${today.getFullYear()}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      } else if (numMatch) {
-        const d = parseInt(numMatch[1]), m = parseInt(numMatch[2]);
-        result.date = `${today.getFullYear()}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      }
-    }
-
-    // --- Amount parsing: "20rs", "20 rs", "₹20", "20 rupees", plain numbers ---
-    const amtMatch = raw.match(/\b(\d+(?:\.\d+)?)\s*(?:rs|rupees?)?\b/);
-    if (amtMatch) result.amount = amtMatch[1];
-
-    // --- Strip date/amount tokens to get merchant name ---
-    let remaining = raw
-      .replace(/\b(today|yesterday)\b/g, '')
-      .replace(/(\d{1,2})(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/g, '')
-      .replace(/(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}/g, '')
-      .replace(/(\d{1,2})[\/-](\d{1,2})/g, '')
-      .replace(/[\u20B9]?\d+(?:\.\d+)?\s*(?:rs|rupees?)?/g, '')
-      .replace(/\b(for|at|on|from|to|and|the|a|an)\b/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    // Capitalise each word
-    if (remaining.length > 1) {
-      result.merchant = remaining.split(' ').filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-    }
-
-    // --- Category inference from keywords ---
-    const catKeywords = {
-      Food: ['tea','coffee','chai','bun','bread','milk','rice','food','meal','lunch','dinner','breakfast','snack','restaurant','hotel','zomato','swiggy','mess','tiffin','samosa','vada','parotta','biryani','egg'],
-      Transport: ['uber','ola','auto','bus','train','metro','petrol','fuel','cab','rickshaw','bike','rapido','flight'],
-      Shopping: ['amazon','flipkart','grocery','groceries','vegetables','market','shop','mall','cloth','shirt','shoes','myntra'],
-      Entertainment: ['netflix','spotify','movie','cinema','game','steam','club','bar','pub','party'],
-      Bills: ['electricity','bill','wifi','broadband','mobile','recharge','phone','jio','airtel'],
-      Medical: ['pharmacy','medicine','doctor','hospital','clinic','tablet','injection'],
-      Rent: ['rent','flat','house','room','deposit'],
-      Investments: ['sip','mutual','fund','groww','zerodha','stock','investment'],
-      Education: ['book','course','udemy','fees','college','school','tuition'],
-    };
-    for (const [cat, words] of Object.entries(catKeywords)) {
-      if (words.some(w => raw.includes(w))) { result.category = cat; break; }
-    }
-
-    return result;
-  }, []);
-
-  // Start/stop listening
-  const showToastRef = React.useRef(null);
-  const handleVoiceMic = React.useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      alert('Voice input not supported. Please use Chrome or Edge.');
-      return;
-    }
-
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-      return;
-    }
-
-    const rec = new SR();
-    recognitionRef.current = rec;
-    rec.lang = 'en-IN';
-    rec.continuous = false;
-    rec.interimResults = false;
-
-    rec.onstart = () => setIsListening(true);
-    rec.onend   = () => setIsListening(false);
-    rec.onerror = () => setIsListening(false);
-
-    rec.onresult = (e) => {
-      const spoken = e.results[0][0].transcript;
-      const parsed = parseVoiceInput(spoken);
-      setForm(prev => ({
-        ...prev,
-        ...(parsed.date     ? { date:     parsed.date }     : {}),
-        ...(parsed.amount   ? { amount:   parsed.amount }   : {}),
-        ...(parsed.merchant ? { merchant: parsed.merchant } : {}),
-        ...(parsed.category ? { category: parsed.category } : {}),
-      }));
-      // Show toast via ref (avoids early-init issue)
-      if (showToastRef.current) showToastRef.current('success', `🎙️ Heard: "${spoken}"`);
-    };
-
-    rec.start();
-  }, [isListening, parseVoiceInput]);
-
+  
+  // --- Search / Filters ---
   const [filterCategory, setFilterCategory] = useState('All');
   const [filterSource, setFilterSource] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -795,7 +681,6 @@ export default function PersonalLedger() {
       setTimeout(() => setErrorMsg(null), 4000);
     }
   };
-  showToastRef.current = showToast;
 
   // --- Supabase Actions ---
 
@@ -4525,7 +4410,7 @@ export default function PersonalLedger() {
               className={`tab-btn-custom w-full text-left py-3 px-4 flex items-center justify-between border-b ${activeTab === 'goals' ? 'active' : ''}`}
               style={{ borderColor: 'var(--rule)' }}
             >
-              <span className="flex items-center"><Icons.Goals /> Roommates & Dues</span>
+              <span className="flex items-center"><Icons.Goals /> Goals & room dues</span>
               {(() => {
                 const pendingGoalsCount = goals.filter(g => g.current < g.target).length;
                 const totalDuesCount = roommateDues.duesList.length + pendingGoalsCount;
@@ -4724,8 +4609,36 @@ export default function PersonalLedger() {
                   </div>
                 )}
 
-                {/* Middle Section: Clean 2-Column Grid */}
-                {analysisType === 'roommates' && (
+                {/* Score Dial (Personal) or Dues summary (Roommates) */}
+                {analysisType === 'personal' ? (
+                  <div className="blur-card rounded p-5 flex items-center justify-between lg:col-span-1">
+                    <div className="space-y-1.5">
+                      <h3 className="font-bold text-xs uppercase tracking-wider text-slate-800">Bachelor Health</h3>
+                      <div className="text-2xl font-extrabold ledger-display" style={{ color: healthScore > 75 ? 'var(--positive)' : healthScore > 50 ? '#D97706' : 'var(--stamp)' }}>
+                        {healthScore}/100
+                      </div>
+                      <span className="text-[10px] font-bold uppercase border-2 px-1.5 py-0.2 rounded" style={{ borderColor: riskStatus.color, color: riskStatus.color }}>
+                        {riskStatus.label}
+                      </span>
+                    </div>
+                    <div className="w-16 h-16 relative flex items-center justify-center">
+                      <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                        <circle cx="18" cy="18" r="16" fill="none" stroke="rgba(0,0,0,0.05)" strokeWidth="3" />
+                        <circle 
+                          cx="18" 
+                          cy="18" 
+                          r="16" 
+                          fill="none" 
+                          stroke={healthScore > 75 ? 'var(--positive)' : healthScore > 50 ? '#D97706' : 'var(--stamp)'}
+                          strokeWidth="3" 
+                          strokeDasharray="100 100" 
+                          strokeDashoffset={100 - healthScore}
+                        />
+                      </svg>
+                      <span className="absolute text-[10px] font-mono font-bold text-slate-600">{healthScore}%</span>
+                    </div>
+                  </div>
+                ) : (
                   <div className="blur-card rounded p-5 flex flex-col justify-between lg:col-span-1">
                     <div>
                       <h3 className="font-bold text-xs uppercase tracking-wider text-slate-800 mb-1">Roommates Balance Status</h3>
@@ -5077,30 +4990,13 @@ export default function PersonalLedger() {
                             setForm({ ...form, merchant: r });
                           }}>Suggest</span>
                         </label>
-                        <div className="relative flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            placeholder="e.g. Zomato, Coffee"
-                            className="ledger-input-box flex-1"
-                            value={form.merchant}
-                            onChange={e => setForm({ ...form, merchant: e.target.value })}
-                          />
-                          <button
-                            type="button"
-                            onClick={handleVoiceMic}
-                            title="Tap to speak expense"
-                            className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 shadow-sm ${
-                              isListening
-                                ? 'bg-red-500 text-white animate-pulse shadow-red-300 shadow-lg'
-                                : 'bg-[var(--ink)] text-[var(--card)] hover:opacity-80'
-                            }`}
-                          >
-                            {isListening
-                              ? <span className="w-3 h-3 bg-white rounded-full animate-ping" />
-                              : <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12v-2h-2z"/></svg>
-                            }
-                          </button>
-                        </div>
+                        <input
+                          type="text"
+                          placeholder="e.g. Zomato, Coffee"
+                          className="ledger-input-box"
+                          value={form.merchant}
+                          onChange={e => setForm({ ...form, merchant: e.target.value })}
+                        />
                       </div>
 
                       <div className="flex flex-col">
@@ -5123,9 +5019,9 @@ export default function PersonalLedger() {
                   {/* Personal Ledger List */}
                   <div className="blur-card rounded p-5 lg:col-span-2 flex flex-col justify-between">
                     <div>
-                      <div className="flex items-center justify-between border-b pb-3 mb-3" style={{ borderColor: 'var(--rule)' }}>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-2 mb-4 border-b gap-2" style={{ borderColor: 'var(--rule)' }}>
                         <h3 className="font-bold text-xs text-slate-900 uppercase tracking-wider">
-                          {currentUser?.name?.split(' ')[0] || 'My'}'s Daily Expenses
+                          {currentUser?.name?.split(' ')[0] || 'My'}'s Personal Ledger
                         </h3>
                         {/* Export Dropdowns */}
                         <div className="flex gap-2 relative">
@@ -5237,7 +5133,7 @@ export default function PersonalLedger() {
                         if (ledgerPeriod === 'today') baseTxs = baseTxs.filter(t => t.date === todayStrVal);
                         else if (ledgerPeriod === 'week') baseTxs = baseTxs.filter(t => t.date >= weekStartStrVal && t.date <= todayStrVal);
                         else if (ledgerPeriod === 'month') baseTxs = baseTxs.filter(t => t.date >= monthStartStrVal && t.date <= todayStrVal);
-                        else if (ledgerPeriod === 'year') baseTxs = baseTxs.filter(t => t.date >= yearStartStr && t.date <= todayStrVal);
+                        else if (ledgerPeriod === 'year') baseTxs = baseTxs.filter(t => t.date >= yearStartStrVal && t.date <= todayStrVal);
 
                         if (baseTxs.length === 0) return (
                           <div className="text-center py-8 text-xs text-slate-500">
@@ -5364,30 +5260,13 @@ export default function PersonalLedger() {
                             setForm({ ...form, merchant: r });
                           }}>Suggest</span>
                         </label>
-                        <div className="relative flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            placeholder="e.g. Sri bought rice"
-                            className="ledger-input-box flex-1"
-                            value={form.merchant}
-                            onChange={e => setForm({ ...form, merchant: e.target.value })}
-                          />
-                          <button
-                            type="button"
-                            onClick={handleVoiceMic}
-                            title="Tap to speak expense"
-                            className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 shadow-sm ${
-                              isListening
-                                ? 'bg-red-500 text-white animate-pulse shadow-red-300 shadow-lg'
-                                : 'bg-[var(--ink)] text-[var(--card)] hover:opacity-80'
-                            }`}
-                          >
-                            {isListening
-                              ? <span className="w-3 h-3 bg-white rounded-full animate-ping" />
-                              : <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12v-2h-2z"/></svg>
-                            }
-                          </button>
-                        </div>
+                        <input
+                          type="text"
+                          placeholder="e.g. Sri bought rice"
+                          className="ledger-input-box"
+                          value={form.merchant}
+                          onChange={e => setForm({ ...form, merchant: e.target.value })}
+                        />
                       </div>
 
                       <div className="flex flex-col">
@@ -5627,7 +5506,7 @@ export default function PersonalLedger() {
               {/* Detailed Form */}
               <div className="blur-card rounded p-5 lg:col-span-1">
                 <h3 className="font-bold text-xs mb-3 text-slate-900 uppercase tracking-wider">
-                  {editingTxId ? '📝 Edit Transaction' : 'Log Daily Expense'}
+                  {editingTxId ? '📝 Edit Transaction' : 'Log Ledger Expense'}
                 </h3>
                 <form onSubmit={addTransaction} className="space-y-3.5">
                   <div className="flex flex-col">
@@ -5674,30 +5553,13 @@ export default function PersonalLedger() {
                         setForm({ ...form, merchant: r });
                       }}>Suggest</span>
                     </label>
-                    <div className="relative flex items-center gap-1.5">
-                      <input
-                        type="text"
-                        placeholder="e.g. Uber, Zomato, Excitel WiFi"
-                        className="ledger-input-box flex-1"
-                        value={form.merchant}
-                        onChange={e => setForm({ ...form, merchant: e.target.value })}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleVoiceMic}
-                        title="Tap to speak expense"
-                        className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 shadow-sm ${
-                          isListening
-                            ? 'bg-red-500 text-white animate-pulse shadow-red-300 shadow-lg'
-                            : 'bg-[var(--ink)] text-[var(--card)] hover:opacity-80'
-                        }`}
-                      >
-                        {isListening
-                          ? <span className="w-3 h-3 bg-white rounded-full animate-ping" />
-                          : <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2H3v2a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12v-2h-2z"/></svg>
-                        }
-                      </button>
-                    </div>
+                    <input
+                      type="text"
+                      placeholder="e.g. Uber, Zomato, Excitel WiFi"
+                      className="ledger-input-box"
+                      value={form.merchant}
+                      onChange={e => setForm({ ...form, merchant: e.target.value })}
+                    />
                   </div>
 
                   <div className="flex flex-col">
@@ -6282,10 +6144,10 @@ export default function PersonalLedger() {
           {/* ============================================================== */}
 
           {activeTab === 'goals' && (
-            <div className="space-y-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* Roommate Management & Dues */}
-              <div className="blur-card rounded p-5 space-y-6">
+              <div className="blur-card rounded p-5 lg:col-span-2 space-y-6">
                 <div>
                   <h3 className="font-bold text-xs uppercase tracking-wider text-slate-950 flex justify-between items-center border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
                     <span>👥 Roommate flatmates list</span>
@@ -6412,44 +6274,6 @@ export default function PersonalLedger() {
                   )}
                 </div>
 
-                {/* Dues Settlement Matrix */}
-                <div>
-                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-950 mb-3 border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
-                    💵 Outstanding splits settlements
-                  </h3>
-                  
-                  {roommateDues.duesList.length === 0 ? (
-                    <div className="text-xs text-slate-500 text-center py-4">No outstanding balances between roommate group! Everyone is squared up.</div>
-                  ) : (
-                    <div className="space-y-2.5">
-                      {roommateDues.duesList.map((due, idx) => (
-                        <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 p-3 bg-white rounded border hover:shadow-sm transition" style={{ borderColor: 'var(--rule)' }}>
-                          <div className="text-xs flex flex-wrap items-center gap-1.5 min-w-0">
-                            <span className="font-bold text-red-700 truncate max-w-[120px]">{due.from}</span>
-                            <span className="text-slate-400">owes</span>
-                            <span className="font-bold text-emerald-800 truncate max-w-[120px]">{due.to}</span>
-                            <span className="font-bold font-mono bg-slate-100 px-2 py-0.5 rounded flex-shrink-0">{fmt(due.amount)}</span>
-                          </div>
-                          
-                          {/* Settle button */}
-                          <div className="flex-shrink-0 w-full sm:w-auto text-right">
-                            {roomAdminId === session?.user?.id ? (
-                              <button 
-                                onClick={() => handleClearDuesDirect(due.from, due.to, due.amount)}
-                                className="w-full sm:w-auto px-3 py-1 bg-[var(--ink)] text-[var(--card)] rounded text-[10px] font-bold"
-                              >
-                                Mark Paid
-                              </button>
-                            ) : (
-                              <span className="text-[10px] text-slate-400 italic font-medium block">Admin only</span>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
                 {/* Danger Zone — Leave or Delete Flat */}
                 <div className="mt-2 pt-4 border-t-2 border-dashed border-red-200">
                   <h4 className="text-[10px] uppercase font-bold tracking-wider text-red-700 mb-2 flex items-center gap-1.5">
@@ -6492,6 +6316,144 @@ export default function PersonalLedger() {
                   </p>
                 </div>
 
+                {/* Dues Settlement Matrix */}
+                <div>
+                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-950 mb-3 border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                    💵 Outstanding splits settlements
+                  </h3>
+                  
+                  {roommateDues.duesList.length === 0 ? (
+                    <div className="text-xs text-slate-500 text-center py-4">No outstanding balances between roommate group! Everyone is squared up.</div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {roommateDues.duesList.map((due, idx) => (
+                        <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 p-3 bg-white rounded border hover:shadow-sm transition" style={{ borderColor: 'var(--rule)' }}>
+                          <div className="text-xs flex flex-wrap items-center gap-1.5 min-w-0">
+                            <span className="font-bold text-red-700 truncate max-w-[120px]">{due.from}</span>
+                            <span className="text-slate-400">owes</span>
+                            <span className="font-bold text-emerald-800 truncate max-w-[120px]">{due.to}</span>
+                            <span className="font-bold font-mono bg-slate-100 px-2 py-0.5 rounded flex-shrink-0">{fmt(due.amount)}</span>
+                          </div>
+                          
+                          {/* Settle button */}
+                          <div className="flex-shrink-0 w-full sm:w-auto text-right">
+                            {roomAdminId === session?.user?.id ? (
+                              <button 
+                                onClick={() => handleClearDuesDirect(due.from, due.to, due.amount)}
+                                className="w-full sm:w-auto px-3 py-1 bg-[var(--ink)] text-[var(--card)] rounded text-[10px] font-bold"
+                              >
+                                Mark Paid
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic font-medium block">Admin only</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Personal Goals (Right column) */}
+              <div className="blur-card rounded p-5 lg:col-span-1 space-y-5">
+                <h3 className="font-bold text-xs uppercase tracking-wider text-slate-950 border-b pb-2" style={{ borderColor: 'var(--rule)' }}>🎯 {currentUser?.name?.split(' ')[0] || 'My'}'s Savings Goals</h3>
+                
+                {/* List Savings Goals */}
+                <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
+                  {goals.map(g => {
+                    const percent = Math.min(100, Math.round((g.current / g.target) * 100));
+                    return (
+                      <div key={g.id} className="space-y-1.5 p-2 bg-slate-900/5 rounded border" style={{ borderColor: 'var(--rule)' }}>
+                        <div className="flex justify-between text-xs font-bold items-center">
+                          <span className="text-slate-800 truncate pr-2" title={g.name}>{g.name}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-[10px]">{percent}%</span>
+                            <button onClick={() => handleDeleteGoal(g.id)} className="text-red-500 hover:text-red-700 transition" title="Delete Goal">
+                              <Icons.Trash className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden border border-slate-300">
+                          <div 
+                            className="h-full bg-[var(--positive)] transition-all duration-300"
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+                        
+                        {/* Target & Current */}
+                        <div className="flex justify-between text-[9px] text-slate-500 font-mono">
+                          <span>Target: {fmt(g.target)}</span>
+                          <span>Deadline: {g.deadline}</span>
+                        </div>
+                        
+                        {/* Quick Saved Update */}
+                        <div className="flex items-center gap-1.5 mt-1 pt-1.5 border-t border-dashed border-slate-200">
+                          <span className="text-[9px] text-slate-500 font-bold">Saved:</span>
+                          <input 
+                            type="number"
+                            value={g.current}
+                            onChange={(e) => handleUpdateGoalProgress(g.id, e.target.value)}
+                            className="w-full bg-white border rounded px-1.5 py-0.5 text-[10px] outline-none text-slate-800 font-mono"
+                            style={{ borderColor: 'var(--rule)' }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {goals.length === 0 && (
+                    <div className="text-center py-4 text-xs text-slate-500">No savings goals created yet.</div>
+                  )}
+                </div>
+
+                {/* Add New Goal Form */}
+                <form onSubmit={handleAddGoal} className="space-y-3 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
+                  <h4 className="text-[10px] font-bold text-slate-900 uppercase tracking-wider">➕ Add Savings Goal</h4>
+                  <div className="space-y-2">
+                    <input 
+                      type="text"
+                      placeholder="Goal Name (e.g. New Phone)"
+                      value={goalForm.name}
+                      onChange={(e) => setGoalForm(prev => ({ ...prev, name: e.target.value }))}
+                      className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800"
+                      style={{ borderColor: 'var(--rule)' }}
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input 
+                        type="number"
+                        placeholder="Target (₹)"
+                        value={goalForm.target}
+                        onChange={(e) => setGoalForm(prev => ({ ...prev, target: e.target.value }))}
+                        className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800 font-mono"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                      <input 
+                        type="number"
+                        placeholder="Current (₹)"
+                        value={goalForm.current}
+                        onChange={(e) => setGoalForm(prev => ({ ...prev, current: e.target.value }))}
+                        className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800 font-mono"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                    </div>
+                    <div className="flex flex-col">
+                      <label className="text-[9px] text-slate-500 font-bold mb-0.5">DEADLINE</label>
+                      <input 
+                        type="date"
+                        value={goalForm.deadline}
+                        onChange={(e) => setGoalForm(prev => ({ ...prev, deadline: e.target.value }))}
+                        className="w-full bg-white border rounded px-2.5 py-1 text-xs outline-none text-slate-800 font-mono"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                    </div>
+                    <button 
+                      type="submit"
+                      className="w-full py-1.5 bg-[var(--ink)] hover:bg-[var(--ink-soft)] text-[var(--card)] rounded text-[10px] font-bold uppercase tracking-wider transition shadow-xs"
+                    >
+                      Create Goal
+                    </button>
+                  </div>
+                </form>
               </div>
 
             </div>
@@ -7542,64 +7504,35 @@ export default function PersonalLedger() {
       )}
 
       {/* ── Mobile Bottom Navigation Bar ── */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t" style={{ background: 'var(--card)', borderColor: 'var(--rule)', boxShadow: '0 -4px 24px rgba(0,0,0,0.08)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t" style={{ background: 'var(--paper-deep)', borderColor: 'var(--rule)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
         {[
-          {
-            id: 'dashboard',
-            label: 'Home',
-            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>)
-          },
-          {
-            id: 'transactions',
-            label: 'Daily Expenses',
-            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 17h8v1H8v-1zm0-3h8v1H8v-1zm0-3h5v1H8v-1z"/></svg>)
-          },
-          {
-            id: 'waste',
-            label: 'Spend',
-            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M5 9.2h3V19H5V9.2zM10.6 5h2.8v14h-2.8V5zm5.6 8H19v6h-2.8v-6z"/></svg>)
-          },
-          {
-            id: 'goals',
-            label: 'Roommates',
-            icon: (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>)
-          },
+          { id: 'dashboard', emoji: '🏠', label: 'Home' },
+          { id: 'transactions', emoji: '📒', label: 'Ledger' },
+          { id: 'waste', emoji: '📊', label: 'Spend' },
+          { id: 'goals', emoji: '👥', label: 'Goals' },
         ].map(tab => {
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className="flex flex-col items-center justify-center gap-1 py-3 flex-1 transition-all duration-200 relative"
+              className="flex flex-col items-center justify-center gap-0.5 py-2.5 flex-1 transition-all duration-150 relative"
               style={{ color: isActive ? 'var(--accent, var(--ink))' : 'var(--ink-soft)' }}
             >
               {isActive && (
-                <span
-                  className="absolute top-0 left-1/2 -translate-x-1/2 rounded-b-full transition-all duration-300"
-                  style={{ width: '36px', height: '3px', background: 'var(--accent, var(--ink))' }}
-                />
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full" style={{ background: 'var(--accent, var(--ink))' }} />
               )}
-              <span
-                className="transition-all duration-200"
-                style={{
-                  transform: isActive ? 'scale(1.15)' : 'scale(1)',
-                  filter: isActive ? 'none' : 'opacity(0.5)'
-                }}
-              >
-                {tab.icon}
-              </span>
-              <span className="text-[9px] font-bold uppercase tracking-wider" style={{ opacity: isActive ? 1 : 0.5 }}>{tab.label}</span>
+              <span className={`text-2xl leading-none transition-transform duration-150 ${isActive ? 'scale-110' : 'scale-100'}`}>{tab.emoji}</span>
+              <span className={`text-[9px] font-bold uppercase tracking-wider ${isActive ? 'opacity-100' : 'opacity-50'}`}>{tab.label}</span>
             </button>
           );
         })}
         <button
           onClick={() => { setProfileNameInput(currentUser?.name || ''); setProfileAvatarInput(currentUser?.avatar || ''); setIsProfileSettingsOpen(true); }}
-          className="flex flex-col items-center justify-center gap-1 py-3 flex-1 transition-all duration-200"
+          className="flex flex-col items-center justify-center gap-0.5 py-2.5 flex-1 transition-all duration-150"
           style={{ color: 'var(--ink-soft)' }}
         >
-          <span style={{ opacity: 0.5 }}>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
-          </span>
+          <span className="text-2xl leading-none">⚙️</span>
           <span className="text-[9px] font-bold uppercase tracking-wider opacity-50">Style</span>
         </button>
       </nav>
