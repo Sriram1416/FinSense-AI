@@ -441,7 +441,11 @@ const getIncludedMembersForTx = (tx, memberNames, roommates, currentUser) => {
 };
 const resolvePayerName = (tx, memberNames, roommates, currentUser, roomAdminId) => {
   let payer = tx.logged_by;
-  if (memberNames.includes(payer)) return payer;
+  if (payer && typeof payer === 'string') {
+    const trimmedPayer = payer.trim().toLowerCase();
+    const matched = memberNames.find(m => m.trim().toLowerCase() === trimmedPayer);
+    if (matched) return matched;
+  }
   
   // Try to find by user_id
   const foundMember = roommates.find(r => r.id === tx.user_id);
@@ -3082,11 +3086,22 @@ export default function PersonalLedger() {
     }
 
     const N = roommates.length + 1;
+
+    // Resolve user_id for the payer ('from')
+    let payerUserId = session.user.id;
+    if (currentUser && currentUser.name.trim().toLowerCase() === from.trim().toLowerCase()) {
+      payerUserId = session.user.id;
+    } else {
+      const matchRoommate = roommates.find(r => r.name.trim().toLowerCase() === from.trim().toLowerCase());
+      if (matchRoommate) {
+        payerUserId = matchRoommate.id;
+      }
+    }
     
     // Log an adjustment transaction:
     // Payer (from) logs a shared transaction with amount * N so they get credited
     const adjustTx = {
-      user_id: session.user.id,
+      user_id: payerUserId,
       room_id: currentRoomId,
       category: 'Other',
       amount: numAmount * N, // mathematically offsets balances
