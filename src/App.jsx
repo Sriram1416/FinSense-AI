@@ -830,7 +830,8 @@ export default function PersonalLedger() {
       }
       if (data) {
         console.log('fetchUserPersonalTransactions success, records fetched:', data.length);
-        const mapped = data.map(tx => {
+        const filteredData = data.filter(tx => !tx.merchant?.startsWith('Settle:') && !tx.note?.includes('settlement'));
+        const mapped = filteredData.map(tx => {
           const match = tx.note?.match(/\[source:(\w+)\]/);
           return {
             ...tx,
@@ -959,7 +960,20 @@ export default function PersonalLedger() {
       const { data, error } = await query;
       if (error) throw error;
       if (data) {
-        const mapped = data.map(tx => {
+        // Automatically purge any settlement entries logged today from Supabase DB
+        const settleIds = data
+          .filter(tx => tx.merchant?.startsWith('Settle:') || tx.note?.includes('settlement'))
+          .map(tx => tx.id);
+
+        if (settleIds.length > 0) {
+          supabase.from('transactions').delete().in('id', settleIds).then(() => {
+            console.log('Successfully purged settlement entries from Supabase DB');
+          }).catch(err => console.error('Cleanup settlement error:', err));
+        }
+
+        const filteredData = data.filter(tx => !tx.merchant?.startsWith('Settle:') && !tx.note?.includes('settlement'));
+
+        const mapped = filteredData.map(tx => {
           const srcMatch = tx.note?.match(/\[source:(\w+)\]/);
           const splitMatch = tx.note?.match(/\[split:([^\]]+)\]/);
           const cleanNote = tx.note
