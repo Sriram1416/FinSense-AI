@@ -502,6 +502,7 @@ export default function PersonalLedger() {
   const [showPartialSplitSelector, setShowPartialSplitSelector] = useState(false);
   const [selectedPastTxIds, setSelectedPastTxIds] = useState([]);
   const [editingTxId, setEditingTxId] = useState(null);
+  const [settleModal, setSettleModal] = useState(null); // { from, to, dueAmount, payAmount }
 
   // --- Core Financial States ---
   const [salary, setSalary] = useState(50000); 
@@ -2089,10 +2090,14 @@ export default function PersonalLedger() {
 
     for (const tx of transactions) {
       if (tx.is_shared && tx.category !== 'System') {
-        totalRoomExpense += tx.amount;
-        if (tx.date === todayStr) dailyRoomExpense += tx.amount;
-        if (tx.date >= startOfWeekStr) weeklyRoomExpense += tx.amount;
-        if (tx.date.slice(0, 7) === curMonthStr) monthlyRoomExpense += tx.amount;
+        const isSettleTx = tx.merchant?.startsWith('Settle:');
+
+        if (!isSettleTx) {
+          totalRoomExpense += tx.amount;
+          if (tx.date === todayStr) dailyRoomExpense += tx.amount;
+          if (tx.date >= startOfWeekStr) weeklyRoomExpense += tx.amount;
+          if (tx.date.slice(0, 7) === curMonthStr) monthlyRoomExpense += tx.amount;
+        }
 
         const payer = resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
         const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
@@ -2101,7 +2106,9 @@ export default function PersonalLedger() {
 
         if (totalPaidMap[payer] !== undefined) {
           totalPaidMap[payer] += tx.amount;
-          txCountMap[payer] = (txCountMap[payer] || 0) + 1;
+          if (!isSettleTx) {
+            txCountMap[payer] = (txCountMap[payer] || 0) + 1;
+          }
         }
 
         included.forEach(name => {
@@ -3068,19 +3075,21 @@ export default function PersonalLedger() {
   // --- Dues Clear Action ---
   const handleClearDuesDirect = async (from, to, amount) => {
     if (!session || !currentRoomId) return;
-    if (!window.confirm(`Mark ₹${amount} dues payment as settled from ${from} to ${to}?`)) return;
+    const numAmount = Number(amount);
+    if (!numAmount || numAmount <= 0) {
+      showToast('error', 'Please enter a valid payment amount.');
+      return;
+    }
 
-    // Log an adjustment transaction:
-    // Payer (from) logs a shared transaction with amount * N so they get credited
-    // Wait! A cleaner way is to insert a specific settlement record or write an offset transaction.
     const N = roommates.length + 1;
     
-    // Resolve which user logged it
+    // Log an adjustment transaction:
+    // Payer (from) logs a shared transaction with amount * N so they get credited
     const adjustTx = {
       user_id: session.user.id,
       room_id: currentRoomId,
       category: 'Other',
-      amount: amount * N, // mathematically offsets balances
+      amount: numAmount * N, // mathematically offsets balances
       merchant: `Settle: ${from} to ${to}`,
       note: `Direct roommates dues settlement logged by ${currentUser.name} [source:manual]`,
       is_shared: true,
@@ -3094,7 +3103,7 @@ export default function PersonalLedger() {
         console.error('handleClearDuesDirect Supabase insert error details:', error);
         throw error;
       }
-      showToast('success', `Settled: Recorded ₹${amount} payment from ${from} to ${to}`);
+      showToast('success', `Settled: Recorded ₹${numAmount} payment from ${from} to ${to}`);
       await fetchTransactions(session.user.id, currentRoomId);
     } catch (e) {
       showToast('error', 'Error logging settlement.');
@@ -6353,10 +6362,10 @@ export default function PersonalLedger() {
                           <div className="flex-shrink-0 w-full sm:w-auto text-right">
                             {roomAdminId === session?.user?.id ? (
                               <button 
-                                onClick={() => handleClearDuesDirect(due.from, due.to, due.amount)}
-                                className="w-full sm:w-auto px-3 py-1 bg-[var(--ink)] text-[var(--card)] rounded text-[10px] font-bold"
+                                onClick={() => setSettleModal({ from: due.from, to: due.to, dueAmount: due.amount, payAmount: String(due.amount) })}
+                                className="w-full sm:w-auto px-3 py-1.5 bg-[var(--ink)] text-[var(--card)] rounded text-[10px] font-bold hover:opacity-90 transition flex items-center justify-center gap-1 shadow-sm"
                               >
-                                Mark Paid
+                                💳 Pay / Settle
                               </button>
                             ) : (
                               <span className="text-[10px] text-slate-400 italic font-medium block">Admin only</span>
@@ -7199,6 +7208,135 @@ export default function PersonalLedger() {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Dues Partial / Full Settlement Modal ─────────────────────────────────── */}
+      {settleModal && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-fadeIn">
+          <div 
+            className="relative w-full max-w-sm rounded-2xl p-5 shadow-2xl space-y-4 border"
+            style={{ background: 'var(--card)', borderColor: 'var(--rule)', color: 'var(--ink)' }}
+          >
+            {/* Header */}
+            <div className="flex justify-between items-center border-b pb-2.5" style={{ borderColor: 'var(--rule)' }}>
+              <div className="flex items-center gap-2">
+                <span className="text-base">💳</span>
+                <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)]">Record Dues Payment</h3>
+              </div>
+              <button 
+                onClick={() => setSettleModal(null)}
+                className="text-slate-400 hover:text-slate-700 text-sm font-bold w-6 h-6 flex items-center justify-center rounded-full hover:bg-slate-200/50 transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Member & Balance Detail Card */}
+            <div className="p-3 rounded-xl bg-slate-500/5 border space-y-1.5 text-xs" style={{ borderColor: 'var(--rule)' }}>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 text-[11px]">Payer (Debtor):</span>
+                <span className="font-bold text-red-600">{settleModal.from}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 text-[11px]">Receiver (Creditor):</span>
+                <span className="font-bold text-emerald-600">{settleModal.to}</span>
+              </div>
+              <div className="flex justify-between items-center border-t pt-1.5" style={{ borderColor: 'var(--rule)' }}>
+                <span className="text-slate-500 text-[11px] font-medium">Total Owed:</span>
+                <span className="font-bold font-mono text-xs text-[var(--ink)]">{fmt(settleModal.dueAmount)}</span>
+              </div>
+            </div>
+
+            {/* Payment Input Field */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-700 block">
+                Enter Payment Amount (₹):
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-sm">₹</span>
+                <input 
+                  type="number"
+                  value={settleModal.payAmount}
+                  onChange={(e) => setSettleModal({ ...settleModal, payAmount: e.target.value })}
+                  placeholder="e.g. 500"
+                  className="w-full pl-7 pr-3 py-2 rounded-xl border font-mono font-bold text-sm bg-white text-slate-900 focus:ring-2 focus:ring-amber-500 outline-none"
+                  style={{ borderColor: 'var(--rule)' }}
+                  min="1"
+                />
+              </div>
+
+              {/* Quick Amount Chips */}
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setSettleModal({ ...settleModal, payAmount: String(settleModal.dueAmount) })}
+                  className="px-2.5 py-1 text-[10px] font-bold rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition"
+                >
+                  Full ({fmt(settleModal.dueAmount)})
+                </button>
+                {settleModal.dueAmount > 100 && (
+                  <button
+                    type="button"
+                    onClick={() => setSettleModal({ ...settleModal, payAmount: String(Math.round(settleModal.dueAmount / 2)) })}
+                    className="px-2.5 py-1 text-[10px] font-bold rounded-lg bg-indigo-100 text-indigo-800 hover:bg-indigo-200 transition"
+                  >
+                    Half ({fmt(Math.round(settleModal.dueAmount / 2))})
+                  </button>
+                )}
+                {[100, 200, 500, 1000].map(amt => (
+                  amt < settleModal.dueAmount ? (
+                    <button
+                      key={amt}
+                      type="button"
+                      onClick={() => setSettleModal({ ...settleModal, payAmount: String(amt) })}
+                      className="px-2 py-0.5 text-[10px] font-bold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
+                    >
+                      ₹{amt}
+                    </button>
+                  ) : null
+                ))}
+              </div>
+            </div>
+
+            {/* Remaining Balance Preview */}
+            {Number(settleModal.payAmount) > 0 && (
+              <div className="text-[10px] bg-amber-500/10 text-amber-900 border border-amber-500/20 p-2 rounded-lg flex justify-between items-center font-medium">
+                <span>Remaining balance after payment:</span>
+                <span className="font-bold font-mono text-xs">
+                  {fmt(Math.max(0, settleModal.dueAmount - Number(settleModal.payAmount)))}
+                </span>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setSettleModal(null)}
+                className="flex-1 py-2 rounded-xl border text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
+                style={{ borderColor: 'var(--rule)' }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const val = Number(settleModal.payAmount);
+                  if (!val || val <= 0) {
+                    showToast('error', 'Please enter a valid amount.');
+                    return;
+                  }
+                  const { from, to } = settleModal;
+                  setSettleModal(null);
+                  await handleClearDuesDirect(from, to, val);
+                }}
+                className="flex-1 py-2 rounded-xl text-xs font-bold text-white bg-[var(--ink)] hover:opacity-90 transition shadow-sm"
+              >
+                ✅ Confirm Paid
+              </button>
             </div>
           </div>
         </div>
