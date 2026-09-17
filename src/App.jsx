@@ -507,6 +507,7 @@ export default function PersonalLedger() {
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
   const [showSettleHistory, setShowSettleHistory] = useState(false);
+  const [spendTimeframe, setSpendTimeframe] = useState('this_week'); // 'this_week', 'last_week', 'this_month', 'all'
 
   // --- Roommates System State ---
   const [currentUser, setCurrentUser] = useState(null);
@@ -6030,94 +6031,279 @@ export default function PersonalLedger() {
           {/* ============================================================== */}
           {/* TAB 3: RULE-BASED WASTE FINDER */}
           {/* ============================================================== */}
+          {/* ============================================================== */}
+          {/* TAB 3: SPEND ANALYTICS & ROOMMATE LEADERBOARD */}
+          {/* ============================================================== */}
           {activeTab === 'waste' && (() => {
-            // Compute spending breakdown for the current month
-            const monthTxs = transactions.filter(t =>
-              analysisType === 'personal' ? !t.is_shared : t.is_shared
-            ).filter(t => t.date.slice(0, 7) === curMonthStr);
+            const todayObj = new Date();
 
-            // Category totals
+            // Compute dates for timeframes:
+            // This week (Mon - Sun)
+            const dayOfWeek = (todayObj.getDay() + 6) % 7;
+            const thisWeekStartObj = new Date(todayObj);
+            thisWeekStartObj.setDate(todayObj.getDate() - dayOfWeek);
+            thisWeekStartObj.setHours(0,0,0,0);
+            const thisWeekStartStr = isoDate(thisWeekStartObj);
+
+            // Last week
+            const lastWeekStartObj = new Date(thisWeekStartObj);
+            lastWeekStartObj.setDate(thisWeekStartObj.getDate() - 7);
+            const lastWeekEndObj = new Date(thisWeekStartObj);
+            lastWeekEndObj.setDate(thisWeekStartObj.getDate() - 1);
+            const lastWeekStartStr = isoDate(lastWeekStartObj);
+            const lastWeekEndStr = isoDate(lastWeekEndObj);
+
+            // Filter transactions by active timeframe & view (personal vs shared)
+            const baseTxs = transactions.filter(t =>
+              analysisType === 'personal' ? !t.is_shared : (t.is_shared && t.category !== 'System' && !t.merchant?.startsWith('Settle:'))
+            );
+
+            let timeframeTxs = baseTxs;
+            let periodTitle = 'All Time';
+
+            if (spendTimeframe === 'this_week') {
+              timeframeTxs = baseTxs.filter(t => t.date >= thisWeekStartStr);
+              periodTitle = 'This Week';
+            } else if (spendTimeframe === 'last_week') {
+              timeframeTxs = baseTxs.filter(t => t.date >= lastWeekStartStr && t.date <= lastWeekEndStr);
+              periodTitle = 'Last Week';
+            } else if (spendTimeframe === 'this_month') {
+              timeframeTxs = baseTxs.filter(t => t.date.slice(0, 7) === curMonthStr);
+              periodTitle = 'This Month';
+            }
+
+            const totalTimeframeSpend = timeframeTxs.reduce((sum, t) => sum + t.amount, 0);
+
+            // Comparison metrics (This week vs Last week)
+            const thisWeekTotal = baseTxs.filter(t => t.date >= thisWeekStartStr).reduce((s, t) => s + t.amount, 0);
+            const lastWeekTotal = baseTxs.filter(t => t.date >= lastWeekStartStr && t.date <= lastWeekEndStr).reduce((s, t) => s + t.amount, 0);
+            const weekDiff = thisWeekTotal - lastWeekTotal;
+            const weekPctChange = lastWeekTotal > 0 ? Math.round(((thisWeekTotal - lastWeekTotal) / lastWeekTotal) * 100) : 0;
+
+            // Roommate Top Spender Leaderboard (when analysisType === 'roommates')
+            const memberNames = [];
+            if (currentUser) memberNames.push(currentUser.name);
+            roommates.forEach(r => memberNames.push(r.name));
+
+            const memberSpendMap = {};
+            memberNames.forEach(m => { memberSpendMap[m] = 0; });
+
+            if (analysisType === 'roommates') {
+              timeframeTxs.forEach(t => {
+                const payer = resolvePayerName(t, memberNames, roommates, currentUser, roomAdminId);
+                if (memberSpendMap[payer] !== undefined) {
+                  memberSpendMap[payer] += t.amount;
+                }
+              });
+            }
+
+            const topSpendersList = Object.entries(memberSpendMap)
+              .map(([name, amount]) => ({ name, amount }))
+              .sort((a, b) => b.amount - a.amount);
+
+            const highestSpender = topSpendersList.length > 0 ? topSpendersList[0] : null;
+
+            // Category breakdown
             const catTotals = {};
-            monthTxs.forEach(t => {
+            timeframeTxs.forEach(t => {
               catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
             });
             const catSorted = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
-            const maxCat = catSorted.length > 0 ? catSorted[0][1] : 1;
+            const maxCatAmt = catSorted.length > 0 ? catSorted[0][1] : 1;
 
-            // Merchant totals (top 5)
+            // Top Merchants
             const merchantTotals = {};
-            monthTxs.forEach(t => {
+            timeframeTxs.forEach(t => {
               if (t.merchant) merchantTotals[t.merchant] = (merchantTotals[t.merchant] || 0) + t.amount;
             });
-            const merchantSorted = Object.entries(merchantTotals).sort((a, b) => b[1] - a[1]).slice(0, 6);
+            const merchantSorted = Object.entries(merchantTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
-            // Day-by-day spend for the month (last 14 days)
-            const today = new Date();
-            const days = Array.from({ length: 14 }, (_, i) => {
-              const d = new Date(today);
-              d.setDate(today.getDate() - (13 - i));
-              return isoDate(d);
-            });
-            const dayTotals = {};
-            monthTxs.forEach(t => { dayTotals[t.date] = (dayTotals[t.date] || 0) + t.amount; });
-            const maxDay = Math.max(...days.map(d => dayTotals[d] || 0), 1);
+            // Single biggest purchase
+            const biggestSingleTx = timeframeTxs.length > 0
+              ? [...timeframeTxs].sort((a, b) => b.amount - a.amount)[0]
+              : null;
 
-            // Top 5 biggest single purchases
-            const biggestTxs = [...monthTxs].sort((a, b) => b.amount - a.amount).slice(0, 5);
-
-            const totalMonth = monthTxs.reduce((s, t) => s + t.amount, 0);
-
-            const catEmoji = { Food: '🍽️', Transport: '🚗', Shopping: '🛍️', Entertainment: '🎮', Rent: '🏠', Bills: '💡', Medical: '💊', Education: '📚', Investments: '📈', Other: '📦' };
+            const catEmoji = { Food: '🍽️', Transport: '🚗', Shopping: '🛍️', Entertainment: '🎮', Rent: '🏠', Bills: '💡', Fuel: '⛽', Medical: '💊', Education: '📚', Investments: '📈', Other: '📦' };
 
             return (
-              <div className="space-y-6">
-                {/* Header */}
-                <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-6 animate-fadeIn">
+                {/* Header Control Bar */}
+                <div className="blur-card rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 border" style={{ borderColor: 'var(--rule)', background: 'var(--card)' }}>
                   <div>
-                    <h3 className="font-bold text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                      📊 Monthly Spending Breakdown
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900/5 text-slate-600 font-bold border border-slate-200 normal-case tracking-normal">
-                        {analysisType === 'personal' ? `Personal · ${currentUser?.name?.split(' ')[0] || 'Me'}` : 'Shared Flat'}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">📊</span>
+                      <h3 className="font-bold text-sm text-[var(--ink)] tracking-wide">
+                        Spend Analytics & Insights
+                      </h3>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                        {analysisType === 'personal' ? 'Personal View' : 'Shared Flat View'}
                       </span>
-                    </h3>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Where your money went this month</p>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-1 font-medium">
+                      Detailed breakdown of where money went & top room spenders
+                    </p>
                   </div>
-                  <div className="blur-card rounded px-4 py-2 text-center">
-                    <div className="text-[9px] text-slate-500 uppercase font-bold">Month Total</div>
-                    <div className="text-lg font-bold font-mono text-slate-800">{fmt(totalMonth)}</div>
+
+                  {/* Timeframe Chips */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+                    {[
+                      { id: 'this_week', label: 'This Week' },
+                      { id: 'last_week', label: 'Last Week' },
+                      { id: 'this_month', label: 'This Month' },
+                      { id: 'all', label: 'All Time' }
+                    ].map(tf => (
+                      <button
+                        key={tf.id}
+                        type="button"
+                        onClick={() => setSpendTimeframe(tf.id)}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition shadow-2xs whitespace-nowrap cursor-pointer ${
+                          spendTimeframe === tf.id
+                            ? 'bg-[var(--ink)] text-[var(--card)]'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        {tf.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
+                {/* Summary Highlight Metrics Banner */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Total Spend for Selected Timeframe */}
+                  <div className="blur-card rounded-2xl p-4 space-y-1 border" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center justify-between">
+                      <span>Total {periodTitle} Spend</span>
+                      <span>💰</span>
+                    </div>
+                    <div className="text-xl font-bold font-mono text-[var(--ink)]">
+                      {fmt(totalTimeframeSpend)}
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-medium">
+                      {timeframeTxs.length} total transactions logged
+                    </div>
+                  </div>
+
+                  {/* Weekly Trend Indicator */}
+                  <div className="blur-card rounded-2xl p-4 space-y-1 border" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center justify-between">
+                      <span>Weekly Trend (vs Last Week)</span>
+                      <span>📈</span>
+                    </div>
+                    <div className="text-xl font-bold font-mono flex items-center gap-2">
+                      <span className={weekDiff > 0 ? 'text-red-600' : 'text-emerald-600'}>
+                        {fmt(Math.abs(weekDiff))}
+                      </span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-sans font-bold ${weekDiff > 0 ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                        {weekDiff > 0 ? `+${weekPctChange}%` : `${weekPctChange}%`}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-medium">
+                      This Week: {fmt(thisWeekTotal)} | Last Week: {fmt(lastWeekTotal)}
+                    </div>
+                  </div>
+
+                  {/* Highest Single Purchase */}
+                  <div className="blur-card rounded-2xl p-4 space-y-1 border" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 flex items-center justify-between">
+                      <span>Biggest Single Expense</span>
+                      <span>⚡</span>
+                    </div>
+                    {biggestSingleTx ? (
+                      <div>
+                        <div className="text-lg font-bold font-mono text-[var(--ink)] truncate" title={biggestSingleTx.merchant}>
+                          {fmt(biggestSingleTx.amount)}
+                        </div>
+                        <div className="text-[10px] text-slate-600 truncate font-semibold">
+                          {biggestSingleTx.merchant || 'Expense'} ({biggestSingleTx.category})
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-400 italic py-1">No expenses logged yet</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Top Spenders Leaderboard (Flat Roommate View) */}
+                {analysisType === 'roommates' && (
+                  <div className="blur-card rounded-2xl p-5 border space-y-3" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="flex items-center justify-between border-b pb-2.5" style={{ borderColor: 'var(--rule)' }}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">🏆</span>
+                        <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)]">
+                          Flat Top Spender Leaderboard ({periodTitle})
+                        </h4>
+                      </div>
+                      {highestSpender && highestSpender.amount > 0 && (
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
+                          🥇 Top Spender: {highestSpender.name} ({fmt(highestSpender.amount)})
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                      {topSpendersList.map((sp, idx) => {
+                        const rankBadge = idx === 0 ? '🥇 1st Place' : idx === 1 ? '🥈 2nd Place' : idx === 2 ? '🥉 3rd Place' : `#${idx + 1}`;
+                        const sharePct = totalTimeframeSpend > 0 ? Math.round((sp.amount / totalTimeframeSpend) * 100) : 0;
+                        return (
+                          <div 
+                            key={sp.name}
+                            className={`p-3.5 rounded-xl border transition flex items-center justify-between gap-3 ${
+                              idx === 0 ? 'bg-amber-50/70 border-amber-200' : 'bg-slate-50 border-slate-200'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <span className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block mb-0.5">
+                                {rankBadge}
+                              </span>
+                              <span className="font-bold text-xs text-[var(--ink)] truncate block">
+                                {sp.name}
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-medium block">
+                                {sharePct}% of flat total
+                              </span>
+                            </div>
+                            <div className="text-right font-mono font-bold text-sm text-[var(--ink)]">
+                              {fmt(sp.amount)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Category & Merchant Breakdown Grid */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Category Breakdown */}
-                  <div className="blur-card rounded p-5">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-slate-800 mb-4 flex items-center gap-1.5">
-                      📂 Category Breakdown
+                  {/* Category Breakdown Progress Bars */}
+                  <div className="blur-card rounded-2xl p-5 border space-y-4" style={{ borderColor: 'var(--rule)' }}>
+                    <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)] flex items-center gap-2 border-b pb-2.5" style={{ borderColor: 'var(--rule)' }}>
+                      <span>📂</span> Category Breakdown ({periodTitle})
                     </h4>
                     {catSorted.length === 0 ? (
-                      <div className="text-center py-8 text-xs text-slate-500">No transactions this month yet.</div>
+                      <div className="text-center py-8 text-xs text-slate-400 italic">No category expenses found for {periodTitle}.</div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="space-y-3.5">
                         {catSorted.map(([cat, amt]) => {
-                          const pct = Math.round((amt / maxCat) * 100);
-                          const sharePct = totalMonth > 0 ? Math.round((amt / totalMonth) * 100) : 0;
+                          const pct = Math.round((amt / maxCatAmt) * 100);
+                          const sharePct = totalTimeframeSpend > 0 ? Math.round((amt / totalTimeframeSpend) * 100) : 0;
                           return (
-                            <div key={cat} className="space-y-1">
-                              <div className="flex justify-between items-center">
-                                <span className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                            <div key={cat} className="space-y-1.5">
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="font-bold text-slate-700 flex items-center gap-2">
                                   <span>{catEmoji[cat] || '📦'}</span> {cat}
                                 </span>
-                                <div className="text-right">
-                                  <span className="text-xs font-bold font-mono text-slate-800">{fmt(amt)}</span>
-                                  <span className="text-[9px] text-slate-400 ml-1.5">{sharePct}%</span>
+                                <div className="text-right font-mono">
+                                  <span className="font-bold text-[var(--ink)]">{fmt(amt)}</span>
+                                  <span className="text-[10px] text-slate-400 ml-1.5 font-sans font-semibold">({sharePct}%)</span>
                                 </div>
                               </div>
-                              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/50">
                                 <div
                                   className="h-full rounded-full transition-all duration-500"
                                   style={{
                                     width: `${pct}%`,
-                                    background: cat === 'Food' ? 'var(--stamp)' : cat === 'Transport' ? '#3B82F6' : cat === 'Shopping' ? '#8B5CF6' : cat === 'Rent' ? '#DC2626' : 'var(--ink-soft)'
+                                    background: cat === 'Food' ? '#D97706' : cat === 'Transport' ? '#2563EB' : cat === 'Shopping' ? '#7C3AED' : cat === 'Rent' ? '#DC2626' : 'var(--ink)'
                                   }}
                                 />
                               </div>
@@ -6128,80 +6314,27 @@ export default function PersonalLedger() {
                     )}
                   </div>
 
-                  {/* Top Merchants */}
-                  <div className="blur-card rounded p-5">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-slate-800 mb-4 flex items-center gap-1.5">
-                      🏪 Top Merchants
+                  {/* Top Merchants List */}
+                  <div className="blur-card rounded-2xl p-5 border space-y-4" style={{ borderColor: 'var(--rule)' }}>
+                    <h4 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)] flex items-center gap-2 border-b pb-2.5" style={{ borderColor: 'var(--rule)' }}>
+                      <span>🏪</span> Top Vendors & Merchants ({periodTitle})
                     </h4>
                     {merchantSorted.length === 0 ? (
-                      <div className="text-center py-8 text-xs text-slate-500">No merchant data yet.</div>
+                      <div className="text-center py-8 text-xs text-slate-400 italic">No vendor transactions for {periodTitle}.</div>
                     ) : (
                       <div className="space-y-2.5">
                         {merchantSorted.map(([merchant, amt], idx) => (
-                          <div key={merchant} className="flex items-center justify-between gap-2 p-2 rounded bg-slate-900/3 hover:bg-slate-900/6 transition-colors">
+                          <div key={merchant} className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-50 border hover:bg-slate-100/60 transition" style={{ borderColor: 'var(--rule)' }}>
                             <div className="flex items-center gap-2.5 min-w-0">
-                              <span className="text-[10px] font-bold text-slate-400 w-4 flex-shrink-0">#{idx + 1}</span>
-                              <span className="text-xs font-semibold text-slate-700 truncate">{merchant}</span>
+                              <span className="text-[10px] font-bold text-slate-400 w-5 flex-shrink-0">#{idx + 1}</span>
+                              <span className="text-xs font-bold text-slate-800 truncate">{merchant}</span>
                             </div>
-                            <span className="text-xs font-bold font-mono text-slate-800 flex-shrink-0">{fmt(amt)}</span>
+                            <span className="text-xs font-bold font-mono text-[var(--ink)] flex-shrink-0">{fmt(amt)}</span>
                           </div>
                         ))}
                       </div>
                     )}
                   </div>
-                </div>
-
-                {/* Day-by-day bar chart (last 14 days) */}
-                <div className="blur-card rounded p-5">
-                  <h4 className="font-bold text-xs uppercase tracking-wider text-slate-800 mb-4 flex items-center gap-1.5">
-                    📅 Daily Spend — Last 14 Days
-                  </h4>
-                  <div className="flex items-end gap-1 h-20">
-                    {days.map(d => {
-                      const val = dayTotals[d] || 0;
-                      const barH = Math.max(4, Math.round((val / maxDay) * 72));
-                      const isToday = d === isoDate(new Date());
-                      const dayLabel = new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric' });
-                      return (
-                        <div key={d} className="flex flex-col items-center gap-0.5 flex-1 group relative">
-                          <div
-                            className={`w-full rounded-t transition-all duration-500 ${isToday ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`}
-                            style={{
-                              height: `${barH}px`,
-                              background: isToday ? 'var(--accent, var(--ink))' : val > 0 ? 'var(--ink-soft)' : 'var(--rule)'
-                            }}
-                            title={`${d}: ${fmt(val)}`}
-                          />
-                          <span className={`text-[7px] font-mono ${isToday ? 'font-bold text-slate-800' : 'text-slate-400'}`}>{dayLabel}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Biggest single purchases */}
-                <div className="blur-card rounded p-5">
-                  <h4 className="font-bold text-xs uppercase tracking-wider text-slate-800 mb-3 flex items-center gap-1.5">
-                    💸 Biggest Purchases This Month
-                  </h4>
-                  {biggestTxs.length === 0 ? (
-                    <div className="text-center py-6 text-xs text-slate-500">No transactions this month yet.</div>
-                  ) : (
-                    <div className="divide-y" style={{ borderColor: 'var(--rule)' }}>
-                      {biggestTxs.map((t, idx) => (
-                        <div key={t.id} className="flex items-center justify-between py-2 gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <span className="text-[10px] font-bold text-slate-400 w-4 flex-shrink-0">#{idx + 1}</span>
-                            <div className="min-w-0">
-                              <div className="text-xs font-semibold text-slate-800 truncate">{t.merchant || '—'}</div>
-                              <div className="text-[9px] text-slate-500">{t.category} · {t.date}</div>
-                            </div>
-                          </div>
-                          <span className="text-sm font-bold font-mono text-slate-800 flex-shrink-0">{fmt(t.amount)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             );
