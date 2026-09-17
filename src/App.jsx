@@ -4004,7 +4004,7 @@ export default function PersonalLedger() {
 
   // Dynamic styles and styling bindings
   const fontStyle = useMemo(() => {
-    let family = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    let family = "'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
     if (fontFamily === 'serif') {
       family = 'Georgia, Cambria, "Times New Roman", Times, serif';
     } else if (fontFamily === 'mono') {
