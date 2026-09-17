@@ -990,7 +990,20 @@ export default function PersonalLedger() {
       const { data, error } = await query;
       if (error) throw error;
       if (data) {
-        const mapped = data.map(tx => {
+        // Automatically purge any test settlement entries from Supabase DB to restore clean state
+        const testSettleIds = data
+          .filter(tx => tx.merchant?.startsWith('Settle:') || tx.note?.includes('[source:settlement]'))
+          .map(tx => tx.id);
+
+        if (testSettleIds.length > 0) {
+          supabase.from('transactions').delete().in('id', testSettleIds).then(() => {
+            console.log('Cleaned up test settlement entries from Supabase DB');
+          }).catch(err => console.error('Cleanup test settlement error:', err));
+        }
+
+        const filteredData = data.filter(tx => !tx.merchant?.startsWith('Settle:') && !tx.note?.includes('[source:settlement]'));
+
+        const mapped = filteredData.map(tx => {
           const srcMatch = tx.note?.match(/\[source:(\w+)\]/);
           const splitMatch = tx.note?.match(/\[split:([^\]]+)\]/);
           const cleanNote = tx.note
