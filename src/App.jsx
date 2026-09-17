@@ -439,11 +439,37 @@ const getIncludedMembersForTx = (tx, memberNames, roommates, currentUser) => {
     return true;
   });
 };
+const findMatchingMemberName = (searchStr, memberNames) => {
+  if (!searchStr || typeof searchStr !== 'string') return null;
+  const s = searchStr.trim().toLowerCase();
+  if (!s) return null;
+
+  // 1. Exact match (case insensitive)
+  const exact = memberNames.find(m => m.trim().toLowerCase() === s);
+  if (exact) return exact;
+
+  // 2. StartsWith match (e.g. "Arul Balamurugan S" starts with "Arul")
+  const starts = memberNames.find(m => m.trim().toLowerCase().startsWith(s) || s.startsWith(m.trim().toLowerCase()));
+  if (starts) return starts;
+
+  // 3. Includes match (e.g. "Arul" in "Arul Balamurugan S")
+  const inc = memberNames.find(m => m.trim().toLowerCase().includes(s) || s.includes(m.trim().toLowerCase()));
+  if (inc) return inc;
+
+  // 4. First word match (e.g. "Arul" matches "Arul Balamurugan S")
+  const firstWord = s.split(' ')[0];
+  if (firstWord.length > 1) {
+    const fwMatch = memberNames.find(m => m.trim().toLowerCase().split(' ')[0] === firstWord);
+    if (fwMatch) return fwMatch;
+  }
+
+  return null;
+};
+
 const resolvePayerName = (tx, memberNames, roommates, currentUser, roomAdminId) => {
   let payer = tx.logged_by;
   if (payer && typeof payer === 'string') {
-    const trimmedPayer = payer.trim().toLowerCase();
-    const matched = memberNames.find(m => m.trim().toLowerCase() === trimmedPayer);
+    const matched = findMatchingMemberName(payer, memberNames);
     if (matched) return matched;
   }
   
@@ -2099,8 +2125,8 @@ export default function PersonalLedger() {
             payAmt = Math.round(tx.amount / N);
           }
 
-          const matchedFrom = memberNames.find(m => m.trim().toLowerCase() === fromName.trim().toLowerCase());
-          const matchedTo = toName ? memberNames.find(m => m.trim().toLowerCase() === toName.trim().toLowerCase()) : null;
+          const matchedFrom = findMatchingMemberName(fromName, memberNames);
+          const matchedTo = toName ? findMatchingMemberName(toName, memberNames) : null;
 
           // 1-on-1 Transfer:
           // Payer (from) paid payAmt -> credited in totalPaidMap
