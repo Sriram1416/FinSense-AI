@@ -3126,30 +3126,18 @@ export default function PersonalLedger() {
       return;
     }
 
-    const N = roommates.length + 1;
-
-    // Resolve user_id for the payer ('from')
-    let payerUserId = session.user.id;
-    if (currentUser && currentUser.name.trim().toLowerCase() === from.trim().toLowerCase()) {
-      payerUserId = session.user.id;
-    } else {
-      const matchRoommate = roommates.find(r => r.name.trim().toLowerCase() === from.trim().toLowerCase());
-      if (matchRoommate) {
-        payerUserId = matchRoommate.id;
-      }
-    }
-    
     // Log direct 1-on-1 settlement transaction:
-    // Stored with category 'System' and exact payment amount (e.g. ₹500)
+    // Always use session.user.id as user_id so Supabase RLS policy allows the insert!
+    // The payer is specified in logged_by: from and merchant string.
     const adjustTx = {
-      user_id: payerUserId,
+      user_id: session.user.id,
       room_id: currentRoomId,
       category: 'System', // System category ensures exclusion from room expense totals
-      amount: numAmount,  // Actual settlement payment amount (e.g. ₹500)
+      amount: numAmount,  // Actual settlement payment amount (e.g. ₹300)
       merchant: `Settle: ${from} to ${to}`,
-      note: `Roommates dues payment of ₹${numAmount} logged by ${currentUser.name} [source:settlement]`,
+      note: `Roommates dues payment of ₹${numAmount} logged by ${currentUser?.name || 'User'} [source:settlement]`,
       is_shared: true,
-      logged_by: from,    // Payer
+      logged_by: from,    // Payer name (e.g. Sanjay, Yogesh, Sriram)
       date: isoDate(new Date())
     };
 
