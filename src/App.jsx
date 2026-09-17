@@ -508,6 +508,7 @@ export default function PersonalLedger() {
   const [successMsg, setSuccessMsg] = useState(null);
   const [showSettleHistory, setShowSettleHistory] = useState(false);
   const [spendTimeframe, setSpendTimeframe] = useState('this_week'); // 'this_week', 'last_week', 'this_month', 'all'
+  const [selectedQuestion, setSelectedQuestion] = useState('this_week_spend');
 
   // --- Roommates System State ---
   const [currentUser, setCurrentUser] = useState(null);
@@ -4063,8 +4064,8 @@ export default function PersonalLedger() {
         };
       case 'coach':
         return {
-          label: 'AI Coach',
-          title: 'AI Financial Coach & Forecasts'
+          label: 'Smart Q&A',
+          title: 'Smart Financial Q&A & Roommates Chat'
         };
       case 'ingestion':
         return {
@@ -4498,7 +4499,7 @@ export default function PersonalLedger() {
               className={`tab-btn-custom w-full text-left py-3 px-4 flex items-center justify-between border-b ${activeTab === 'coach' ? 'active' : ''}`}
               style={{ borderColor: 'var(--rule)' }}
             >
-              <span className="flex items-center"><Icons.Coach /> AI Coach & Forecasting</span>
+              <span className="flex items-center"><Icons.Coach /> 💡 Smart Q&A Insights</span>
             </button>
             <button
               onClick={() => { setActiveTab('ingestion'); setAnalysisType('personal'); setIsMobileMenuOpen(false); }}
@@ -6729,337 +6730,361 @@ export default function PersonalLedger() {
           {/* ============================================================== */}
           {/* TAB 5: AI COACH & FORECASTING */}
           {/* ============================================================== */}
-          {activeTab === 'coach' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* Chat Window */}
-              <div className="blur-card rounded p-0 lg:col-span-2 flex flex-col overflow-hidden" style={{ height: '520px' }}>
-                
-                {/* Chat Mode Sub-Tabs */}
-                <div className="flex bg-slate-900/5 border-b" style={{ borderColor: 'var(--rule)' }}>
-                  <button
-                    onClick={() => setChatSubTab('ai')}
-                    className={`flex-1 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
-                      chatSubTab === 'ai'
-                        ? 'bg-[var(--ink)] text-[var(--card)]'
-                        : 'text-slate-600 hover:bg-slate-200/50'
-                    }`}
-                  >
-                    🤖 AI Financial Coach
-                  </button>
-                  <button
-                    onClick={() => setChatSubTab('roommates')}
-                    className={`flex-1 py-2.5 text-center text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
-                      chatSubTab === 'roommates'
-                        ? 'bg-[var(--ink)] text-[var(--card)]'
-                        : 'text-slate-600 hover:bg-slate-200/50'
-                    }`}
-                  >
-                    💬 Roommates Group Chat
-                  </button>
-                </div>
+          {/* ============================================================== */}
+          {/* TAB 5: SMART Q&A INSIGHTS & ROOMMATES CHAT */}
+          {/* ============================================================== */}
+          {activeTab === 'coach' && (() => {
+            const todayObj = new Date();
+            const dayOfWeek = (todayObj.getDay() + 6) % 7;
+            const thisWeekStartObj = new Date(todayObj);
+            thisWeekStartObj.setDate(todayObj.getDate() - dayOfWeek);
+            thisWeekStartObj.setHours(0,0,0,0);
+            const thisWeekStartStr = isoDate(thisWeekStartObj);
 
-                {chatSubTab === 'ai' ? (
-                  <>
-                    {/* Chat Header (AI) */}
-                    <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: 'var(--ink)' }}>
-                      <div className="w-8 h-8 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-sm flex-shrink-0">AI</div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-bold text-white">FinSense AI Coach</p>
-                        <p className="text-[9px] text-slate-400 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full inline-block animate-pulse"></span> Online — {roommates.length + 1} member flat
+            // Calculations for Q&A Answers
+            const personalTxsThisWeek = transactions.filter(t => !t.is_shared && t.date >= thisWeekStartStr);
+            const personalWeekTotal = personalTxsThisWeek.reduce((s, t) => s + t.amount, 0);
+
+            const sharedTxsThisWeek = transactions.filter(t => t.is_shared && t.category !== 'System' && !t.merchant?.startsWith('Settle:') && t.date >= thisWeekStartStr);
+            const sharedWeekTotal = sharedTxsThisWeek.reduce((s, t) => s + t.amount, 0);
+            const N = roommates.length + 1;
+            const myWeeklySharedShare = N > 0 ? Math.round(sharedWeekTotal / N) : 0;
+            const totalMyWeeklySpend = personalWeekTotal + myWeeklySharedShare;
+
+            // Monthly Flat Spend
+            const monthSharedTxs = transactions.filter(t => t.is_shared && t.category !== 'System' && !t.merchant?.startsWith('Settle:') && t.date.slice(0, 7) === curMonthStr);
+            const monthSharedTotal = monthSharedTxs.reduce((s, t) => s + t.amount, 0);
+            const myMonthlySharedShare = N > 0 ? Math.round(monthSharedTotal / N) : 0;
+
+            // Salary Remaining
+            const totalMyPersonalMonth = transactions.filter(t => !t.is_shared && t.date.slice(0, 7) === curMonthStr).reduce((s, t) => s + t.amount, 0);
+            const totalMyMonthSpend = totalMyPersonalMonth + myMonthlySharedShare;
+            const remainingSalary = salary - totalMyMonthSpend;
+
+            // Top Category this month
+            const catMap = {};
+            transactions.filter(t => t.date.slice(0, 7) === curMonthStr && !t.merchant?.startsWith('Settle:')).forEach(t => {
+              catMap[t.category] = (catMap[t.category] || 0) + t.amount;
+            });
+            const topCategoryEntry = Object.entries(catMap).sort((a, b) => b[1] - a[1])[0];
+
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+                
+                {/* Main Q&A / Chat Window */}
+                <div className="blur-card rounded-2xl p-0 lg:col-span-2 flex flex-col overflow-hidden border shadow-sm" style={{ height: '560px', borderColor: 'var(--rule)' }}>
+                  
+                  {/* Sub-Tabs: Smart Q&A vs Roommates Chat */}
+                  <div className="flex bg-slate-900/5 border-b" style={{ borderColor: 'var(--rule)' }}>
+                    <button
+                      type="button"
+                      onClick={() => setChatSubTab('ai')}
+                      className={`flex-1 py-3 text-center text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        chatSubTab === 'ai'
+                          ? 'bg-[var(--ink)] text-[var(--card)]'
+                          : 'text-slate-600 hover:bg-slate-200/50'
+                      }`}
+                    >
+                      💡 Quick Smart Q&A
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChatSubTab('roommates')}
+                      className={`flex-1 py-3 text-center text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        chatSubTab === 'roommates'
+                          ? 'bg-[#128C7E] text-white'
+                          : 'text-slate-600 hover:bg-slate-200/50'
+                      }`}
+                    >
+                      💬 Flat Roommates Chat
+                    </button>
+                  </div>
+
+                  {chatSubTab === 'ai' ? (
+                    <div className="flex-1 flex flex-col p-4 overflow-y-auto space-y-4" style={{ background: 'var(--card)' }}>
+                      
+                      {/* Q&A Header */}
+                      <div className="p-3.5 rounded-2xl bg-slate-900/5 border space-y-1" style={{ borderColor: 'var(--rule)' }}>
+                        <div className="flex items-center gap-2 font-bold text-xs text-[var(--ink)]">
+                          <span>💡</span>
+                          <span>Click any question chip below for instant visual answer:</span>
+                        </div>
+                        <p className="text-[10px] text-slate-500 font-medium">
+                          Get real-time answers about your personal spending, roommate shares & savings.
                         </p>
                       </div>
-                      <button
-                        onClick={() => setChatMessages([{ id: 1, sender: 'coach', text: `Hello ${currentUser?.name?.split(' ')[0] || ''}! I'm your AI Financial Coach. Ask me anything about your spending, roommate splits, savings rate, or type "help" for a full command list!`, time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) }])}
-                        className="text-[9px] text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition"
-                      >
-                        Clear
-                      </button>
-                    </div>
 
-                    {/* Quick Suggestion Chips (AI) */}
-                    <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b" style={{ borderColor: 'var(--rule)' }}>
-                      {[
-                        ["📅 Today's budget", "today's budget"],
-                        ["📊 Monthly summary", "monthly summary"],
-                        ["🔍 Spending leaks", "spending leaks"],
-                        ["💰 Savings rate", "savings rate"],
-                        ["👥 Who owes who", "who owes who"],
-                        ["🏠 Rent status", "rent status"],
-                        ["⚡ Health score", "health score"],
-                        ["📈 Survival pace", "survival pace"],
-                        ["🔝 Top spends", "top spends"],
-                        ["❓ Help", "help"]
-                      ].map(([label, query]) => (
-                        <button
-                          key={query}
-                          onClick={() => askAI(query)}
-                          className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-slate-900 hover:text-white transition-all whitespace-nowrap"
-                          style={{ borderColor: 'var(--rule)', color: 'var(--ink-soft)' }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
+                      {/* Interactive Question Chips */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {[
+                          { id: 'this_week_spend', label: '📅 Spent This Week?', icon: '📅' },
+                          { id: 'flat_month_share', label: '🏠 Flat Monthly Spend?', icon: '🏠' },
+                          { id: 'top_category', label: '📂 Top Category?', icon: '📂' },
+                          { id: 'dues_status', label: '💵 Who Owes Who?', icon: '💵' },
+                          { id: 'budget_left', label: '💰 Salary Remaining?', icon: '💰' },
+                          { id: 'top_spender', label: '🏆 Flat Top Spender?', icon: '🏆' }
+                        ].map(q => (
+                          <button
+                            key={q.id}
+                            type="button"
+                            onClick={() => setSelectedQuestion(q.id)}
+                            className={`p-2.5 rounded-xl border text-xs font-bold text-left transition flex items-center gap-1.5 shadow-2xs cursor-pointer ${
+                              selectedQuestion === q.id
+                                ? 'bg-[var(--ink)] text-[var(--card)] border-[var(--ink)]'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            <span>{q.icon}</span>
+                            <span className="truncate">{q.label}</span>
+                          </button>
+                        ))}
+                      </div>
 
-                    {/* Messages Feed (AI) */}
-                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs">
-                      {chatMessages.map(msg => (
-                        <div key={msg.id} className={`flex gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                          {msg.sender === 'coach' && (
-                            <div className="w-6 h-6 rounded-full bg-emerald-400 flex items-center justify-center text-slate-900 font-black text-[9px] flex-shrink-0 mt-0.5">AI</div>
-                          )}
-                          <div className="flex flex-col gap-0.5 max-w-[78%]">
-                            <div
-                              className={`p-3 rounded-2xl shadow-sm whitespace-pre-line leading-relaxed text-[11px] ${
-                                msg.sender === 'user'
-                                  ? 'bg-[var(--ink)] text-[var(--card)] rounded-br-none'
-                                  : 'bg-slate-100 text-slate-800 rounded-bl-none border'
-                              }`}
-                              style={{ borderColor: msg.sender !== 'user' ? 'var(--rule)' : 'transparent' }}
-                            >
-                              {msg.text}
+                      {/* Dynamic Answer Canvas */}
+                      <div className="flex-1 p-4 rounded-2xl bg-slate-50 border space-y-3 shadow-inner" style={{ borderColor: 'var(--rule)' }}>
+                        {selectedQuestion === 'this_week_spend' && (
+                          <div className="space-y-3 animate-fadeIn">
+                            <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                              <span className="font-bold text-xs text-[var(--ink)] uppercase">📅 Your Spending This Week</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                Mon - Today
+                              </span>
                             </div>
-                            {msg.time && (
-                              <span className={`text-[8px] text-slate-400 ${msg.sender === 'user' ? 'text-right' : 'text-left'}`}>{msg.time}</span>
+                            <div className="text-2xl font-bold font-mono text-[var(--ink)]">
+                              {fmt(totalMyWeeklySpend)}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="p-2.5 rounded-xl bg-white border" style={{ borderColor: 'var(--rule)' }}>
+                                <span className="text-[10px] text-slate-500 font-bold uppercase block">Personal Expenses</span>
+                                <span className="font-bold font-mono text-slate-800">{fmt(personalWeekTotal)}</span>
+                              </div>
+                              <div className="p-2.5 rounded-xl bg-white border" style={{ borderColor: 'var(--rule)' }}>
+                                <span className="text-[10px] text-slate-500 font-bold uppercase block">Roommate Share</span>
+                                <span className="font-bold font-mono text-slate-800">{fmt(myWeeklySharedShare)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedQuestion === 'flat_month_share' && (
+                          <div className="space-y-3 animate-fadeIn">
+                            <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                              <span className="font-bold text-xs text-[var(--ink)] uppercase">🏠 Flat Shared Expenses ({curMonthStr})</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                                {N} Roommates
+                              </span>
+                            </div>
+                            <div className="text-2xl font-bold font-mono text-[var(--ink)]">
+                              {fmt(monthSharedTotal)}
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-white border text-xs space-y-1" style={{ borderColor: 'var(--rule)' }}>
+                              <div className="flex justify-between font-bold">
+                                <span>Your Equal 1/{N} Share:</span>
+                                <span className="font-mono text-amber-800">{fmt(myMonthlySharedShare)}</span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 leading-relaxed">
+                                Calculated across all food, groceries, internet, and flat maintenance expenses this month.
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedQuestion === 'top_category' && (
+                          <div className="space-y-3 animate-fadeIn">
+                            <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                              <span className="font-bold text-xs text-[var(--ink)] uppercase">📂 Your Top Category This Month</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                                #1 Category
+                              </span>
+                            </div>
+                            {topCategoryEntry ? (
+                              <div className="space-y-2">
+                                <div className="text-2xl font-bold font-mono text-[var(--ink)] flex items-center gap-2">
+                                  <span>{topCategoryEntry[0]}</span>
+                                  <span>{fmt(topCategoryEntry[1])}</span>
+                                </div>
+                                <p className="text-xs text-slate-600 font-medium">
+                                  This category accounts for the largest portion of your monthly budget.
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="text-xs text-slate-500">No transactions recorded this month yet.</div>
                             )}
                           </div>
-                          {msg.sender === 'user' && (
-                            <div className="flex-shrink-0 mt-0.5">
-                              {renderAvatar(currentUser?.avatar, currentUser?.name, "w-6 h-6 text-[9px]")}
+                        )}
+
+                        {selectedQuestion === 'dues_status' && (
+                          <div className="space-y-3 animate-fadeIn">
+                            <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                              <span className="font-bold text-xs text-[var(--ink)] uppercase">💵 Roommate Dues Matrix Status</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                                {roommateDues.duesList.length} Dues
+                              </span>
                             </div>
-                          )}
-                        </div>
-                      ))}
-                      <div ref={chatEndRef} />
-                    </div>
-
-                    {/* Chat input bar (AI) */}
-                    <div className="px-3 pb-3 pt-2 border-t flex gap-2 items-center" style={{ borderColor: 'var(--rule)' }}>
-                      <button
-                        onClick={() => {
-                          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                          if (!SpeechRecognition) { showToast('error', 'Voice not supported — use Chrome or Edge'); return; }
-                          const rec = new SpeechRecognition();
-                          rec.lang = 'en-IN';
-                          rec.interimResults = false;
-                          rec.onresult = (e) => {
-                            const transcript = e.results[0][0].transcript;
-                            setChatInput(transcript);
-                            setTimeout(() => askAI(transcript), 200);
-                          };
-                          rec.onerror = () => showToast('error', 'Could not hear you. Try again.');
-                          rec.start();
-                          showToast('success', '🎙️ Listening for your question...');
-                        }}
-                        className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-700 text-white flex items-center justify-center flex-shrink-0 transition shadow-sm"
-                        title="Ask by voice"
-                      >
-                        <Icons.Microphone className="w-3.5 h-3.5" />
-                      </button>
-                      <input
-                        type="text"
-                        placeholder="Ask anything... or tap 🎙️ to speak"
-                        className="flex-1 ledger-input-box text-xs"
-                        value={chatInput}
-                        onChange={e => setChatInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') askAI(chatInput); }}
-                      />
-                      <button
-                        onClick={() => askAI(chatInput)}
-                        className="btn-vintage-ink flex-shrink-0 px-3 py-1.5 text-xs"
-                      >
-                        Send
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {/* Chat Header (Roommates) */}
-                    <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: '#128C7E' }}>
-                      <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-[#128C7E] font-black text-sm flex-shrink-0">💬</div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[11px] font-bold text-white">Flat Roommates Group Chat</p>
-                        <p className="text-[9px] text-teal-100 truncate">
-                          {currentUser?.name?.split(' ')[0] || ''}
-                          {roommates.map(r => `, ${r.name.split(' ')[0]}`).join('')}
-                        </p>
-                      </div>
-                      <span className="text-[8px] px-1.5 py-0.5 rounded bg-teal-850 text-teal-100 font-bold border border-teal-600">
-                        WhatsApp Style
-                      </span>
-                    </div>
-
-                    {/* Quick Suggestion Chips (Roommates) */}
-                    <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b bg-slate-50" style={{ borderColor: 'var(--rule)' }}>
-                      {[
-                        ["💰 Settle up dues!", "Guys, please settle your outstanding dues!"],
-                        ["🏠 Rent reminder", "Friendly reminder: house rent is due soon!"],
-                        ["🔌 WiFi bill paid", "I have paid the WiFi bill, split uploaded!"],
-                        ["🥬 Buying groceries", "Going to buy groceries. Let me know if we need anything!"],
-                        ["🧹 Clean flat!", "Let's clean the flat today, it's a mess!"],
-                        ["🍵 Tea time?", "Anyone up for a tea break?"],
-                        ["🥛 Milk done", "Milk packet has been bought and kept in fridge."]
-                      ].map(([label, msgText]) => (
-                        <button
-                          key={label}
-                          onClick={() => sendRoommateChatMessage(msgText)}
-                          disabled={!currentRoomId}
-                          className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-[#128C7E] hover:text-white transition-all whitespace-nowrap disabled:opacity-50"
-                          style={{ borderColor: 'var(--rule)', color: '#128C7E' }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Messages Feed (Roommates) */}
-                    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs bg-[#E5DDD5]">
-                      {!currentRoomId ? (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
-                          <span className="text-3xl">🏠</span>
-                          <p className="text-xs font-bold text-slate-700">You are not in a flat roommate group yet.</p>
-                          <p className="text-[10px] text-center max-w-[240px] text-slate-600">Create or join a roommate flat in the **Goals & room dues** tab to start group chatting!</p>
-                        </div>
-                      ) : roommateChatMessages.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
-                          <span className="text-3xl">💬</span>
-                          <p className="text-xs font-bold text-slate-700">No messages in flat room yet.</p>
-                          <p className="text-[10px] text-slate-600">Type below to start chatting with your roommates!</p>
-                        </div>
-                      ) : (
-                        roommateChatMessages.map(msg => {
-                          const isMe = msg.sender === currentUser?.name;
-                          return (
-                            <div key={msg.id} className={`flex gap-1.5 ${isMe ? 'justify-end' : 'justify-start'}`}>
-                              {!isMe && (
-                                <div className="flex-shrink-0 mt-1">
-                                  {renderAvatar(msg.avatar, msg.sender, "w-5 h-5 text-[8px]")}
-                                </div>
-                              )}
-                              <div className="flex flex-col gap-0.5 max-w-[75%]">
-                                <div
-                                  className={`p-2.5 rounded-xl shadow-xs leading-relaxed text-[11px] relative ${
-                                    isMe
-                                      ? 'bg-[#DCF8C6] text-slate-800 rounded-tr-none'
-                                      : 'bg-white text-slate-800 rounded-tl-none border'
-                                  }`}
-                                  style={{ borderColor: !isMe ? 'var(--rule)' : 'transparent' }}
-                                >
-                                  {!isMe && (
-                                    <p className="text-[8px] font-bold text-teal-800 mb-0.5 uppercase tracking-wider">{msg.sender}</p>
-                                  )}
-                                  <p>{msg.text}</p>
-                                </div>
-                                <span className={`text-[7px] text-slate-500 px-0.5 ${isMe ? 'text-right' : 'text-left'}`}>
-                                  {msg.time}
-                                </span>
+                            {roommateDues.duesList.length === 0 ? (
+                              <div className="text-xs text-slate-500 font-bold text-center py-4">✨ Everyone is completely squared up! Zero dues pending.</div>
+                            ) : (
+                              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                                {roommateDues.duesList.map((d, idx) => (
+                                  <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-white border text-xs font-bold" style={{ borderColor: 'var(--rule)' }}>
+                                    <span className="text-red-700">{d.from}</span>
+                                    <span className="text-slate-400 font-normal">owes</span>
+                                    <span className="text-emerald-800">{d.to}</span>
+                                    <span className="font-mono bg-slate-100 px-2 py-0.5 rounded">{fmt(d.amount)}</span>
+                                  </div>
+                                ))}
                               </div>
-                              {isMe && (
-                                <div className="flex-shrink-0 mt-1">
-                                  {renderAvatar(msg.avatar, msg.sender, "w-5 h-5 text-[8px]")}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
-                      <div ref={chatEndRef} />
-                    </div>
-
-                    {/* Chat input bar (Roommates) */}
-                    <div className="px-3 pb-3 pt-2 border-t flex gap-2 items-center bg-slate-50" style={{ borderColor: 'var(--rule)' }}>
-                      <button
-                        onClick={() => {
-                          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                          if (!SpeechRecognition) { showToast('error', 'Voice not supported — use Chrome or Edge'); return; }
-                          const rec = new SpeechRecognition();
-                          rec.lang = 'en-IN';
-                          rec.interimResults = false;
-                          rec.onresult = (e) => {
-                            const transcript = e.results[0][0].transcript;
-                            setRoommateChatInput(transcript);
-                            setTimeout(() => sendRoommateChatMessage(transcript), 200);
-                          };
-                          rec.onerror = () => showToast('error', 'Could not hear you. Try again.');
-                          rec.start();
-                          showToast('success', '🎙️ Listening for your message...');
-                        }}
-                        disabled={!currentRoomId}
-                        className="w-8 h-8 rounded-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white flex items-center justify-center flex-shrink-0 transition shadow-sm"
-                        title="Speak your message"
-                      >
-                        <Icons.Microphone className="w-3.5 h-3.5" />
-                      </button>
-                      <input
-                        type="text"
-                        placeholder={currentRoomId ? "Type message... or tap 🎙️ to speak" : "Join a flat to chat..."}
-                        disabled={!currentRoomId}
-                        className="flex-1 ledger-input-box text-xs disabled:bg-slate-200/50"
-                        value={roommateChatInput}
-                        onChange={e => setRoommateChatInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') sendRoommateChatMessage(); }}
-                      />
-                      <button
-                        onClick={() => sendRoommateChatMessage()}
-                        disabled={!currentRoomId || !roommateChatInput.trim()}
-                        className="btn-vintage-ink flex-shrink-0 px-3 py-1.5 text-xs disabled:opacity-50"
-                      >
-                        Send
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Dynamic Mistake Flags */}
-              <div className="blur-card rounded p-5 lg:col-span-1 flex flex-col justify-between">
-                <div>
-                  <h3 className="font-bold text-xs uppercase tracking-wider text-slate-900 border-b pb-2 mb-3" style={{ borderColor: 'var(--rule)' }}>
-                    🚨 Heuristic Mistake flags
-                  </h3>
-                  
-                  {mistakeAlerts.length === 0 ? (
-                    <div className="text-xs text-slate-500 py-4 text-center">No budget leakages flagged. Keep up the high savings rate!</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {mistakeAlerts.map((alert, idx) => (
-                        <div key={idx} className="p-3 bg-red-600/5 border border-red-500/20 rounded flex items-start gap-2">
-                          <Icons.Siren className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
-                          <div>
-                            <h4 className="font-bold text-xs text-red-900">{alert.title}</h4>
-                            <p className="text-[10px] text-red-800/80 mt-0.5 leading-relaxed">{alert.desc}</p>
+                            )}
                           </div>
+                        )}
+
+                        {selectedQuestion === 'budget_left' && (
+                          <div className="space-y-3 animate-fadeIn">
+                            <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                              <span className="font-bold text-xs text-[var(--ink)] uppercase">💰 Salary Budget Remaining</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                Salary: {fmt(salary)}
+                              </span>
+                            </div>
+                            <div className={`text-2xl font-bold font-mono ${remainingSalary >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                              {fmt(remainingSalary)}
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-white border text-xs space-y-1" style={{ borderColor: 'var(--rule)' }}>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Spent So Far:</span>
+                                <span className="font-mono font-bold">{fmt(totalMyMonthSpend)}</span>
+                              </div>
+                              <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden mt-1">
+                                <div 
+                                  className="h-full bg-emerald-600 rounded-full transition-all duration-500" 
+                                  style={{ width: `${Math.min(100, Math.max(0, (totalMyMonthSpend / salary) * 100))}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedQuestion === 'top_spender' && (
+                          <div className="space-y-3 animate-fadeIn">
+                            <div className="flex items-center justify-between border-b pb-2" style={{ borderColor: 'var(--rule)' }}>
+                              <span className="font-bold text-xs text-[var(--ink)] uppercase">🏆 Flat Top Spender This Week</span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900">
+                                Leaderboard
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 font-medium">
+                              Check the <strong>SPEND</strong> tab leaderboard to see full weekly & monthly rankings of top flat spenders!
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Chat Header (Roommates) */}
+                      <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--rule)', background: '#128C7E' }}>
+                        <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-[#128C7E] font-black text-sm flex-shrink-0">💬</div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-bold text-white">Flat Roommates Group Chat</p>
+                          <p className="text-[9px] text-teal-100 truncate">
+                            {currentUser?.name?.split(' ')[0] || ''}
+                            {roommates.map(r => `, ${r.name.split(' ')[0]}`).join('')}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Quick Suggestion Chips (Roommates) */}
+                      <div className="flex gap-1.5 px-3 py-2 overflow-x-auto flex-shrink-0 border-b bg-slate-50" style={{ borderColor: 'var(--rule)' }}>
+                        {[
+                          ["💰 Settle up dues!", "Guys, please settle your outstanding dues!"],
+                          ["🏠 Rent reminder", "Friendly reminder: house rent is due soon!"],
+                          ["🔌 WiFi bill paid", "I have paid the WiFi bill, split uploaded!"],
+                          ["🥬 Buying groceries", "Going to buy groceries. Let me know if we need anything!"],
+                          ["🍵 Tea time?", "Anyone up for a tea break?"]
+                        ].map(([label, msgText]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => sendRoommateChatMessage(msgText)}
+                            disabled={!currentRoomId}
+                            className="flex-shrink-0 px-2.5 py-1 rounded-full border text-[9px] font-bold hover:bg-[#128C7E] hover:text-white transition-all whitespace-nowrap disabled:opacity-50 cursor-pointer"
+                            style={{ borderColor: 'var(--rule)', color: '#128C7E' }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Messages Feed (Roommates) */}
+                      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-xs bg-[#E5DDD5]">
+                        {!currentRoomId ? (
+                          <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
+                            <span className="text-3xl">🏠</span>
+                            <p className="text-xs font-bold text-slate-700">You are not in a flat roommate group yet.</p>
+                          </div>
+                        ) : roommateChatMessages.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2">
+                            <span className="text-3xl">💬</span>
+                            <p className="text-xs font-bold text-slate-700">No messages in flat room yet.</p>
+                          </div>
+                        ) : (
+                          roommateChatMessages.map(msg => (
+                            <div key={msg.id} className={`flex gap-2 ${msg.sender_id === session?.user?.id ? 'justify-end' : 'justify-start'}`}>
+                              <div className={`p-2.5 rounded-2xl shadow-xs text-xs max-w-[80%] ${msg.sender_id === session?.user?.id ? 'bg-[#DCF8C6] text-slate-900 rounded-br-none' : 'bg-white text-slate-900 rounded-bl-none'}`}>
+                                <div className="text-[9px] font-bold text-teal-800 mb-0.5">{msg.sender_name}</div>
+                                <div>{msg.content}</div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+                {/* Dynamic Mistake Flags */}
+                <div className="blur-card rounded-2xl p-5 border flex flex-col justify-between" style={{ borderColor: 'var(--rule)' }}>
+                  <div>
+                    <h3 className="font-bold text-xs uppercase tracking-wider text-[var(--ink)] border-b pb-2 mb-3 flex items-center gap-1.5" style={{ borderColor: 'var(--rule)' }}>
+                      <span>🚨</span> Heuristic Mistake Flags
+                    </h3>
+                    
+                    {mistakeAlerts.length === 0 ? (
+                      <div className="text-xs text-slate-500 py-4 text-center font-medium">✨ No budget leakages flagged. Keep up the high savings rate!</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {mistakeAlerts.map((alert, idx) => (
+                          <div key={idx} className="p-3 bg-red-600/5 border border-red-500/20 rounded-xl flex items-start gap-2">
+                            <Icons.Siren className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="font-bold text-xs text-red-900">{alert.title}</h4>
+                              <p className="text-[10px] text-red-800/80 mt-0.5 leading-relaxed">{alert.desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Quick stat cards */}
+                    <div className="mt-4 pt-3 border-t space-y-2" style={{ borderColor: 'var(--rule)' }}>
+                      <p className="text-[9px] uppercase font-bold tracking-wider text-slate-500 mb-2">Quick Stats</p>
+                      {[
+                        { label: 'Health Score', value: `${healthScore}/100`, color: healthScore >= 70 ? 'text-emerald-700' : healthScore >= 50 ? 'text-amber-700' : 'text-red-700' },
+                        { label: 'Monthly Spent', value: fmt(totals.month), color: 'text-slate-800' },
+                        { label: 'Remaining', value: fmt(Math.max(0, remainingSalary)), color: remainingSalary >= 0 ? 'text-emerald-700' : 'text-red-700' },
+                        { label: 'Risk Level', value: riskStatus.label, color: riskStatus.level === 'low' ? 'text-emerald-700' : riskStatus.level === 'medium' ? 'text-amber-700' : 'text-red-700' },
+                      ].map(s => (
+                        <div key={s.label} className="flex justify-between items-center text-[10px]">
+                          <span className="text-slate-500">{s.label}</span>
+                          <span className={`font-bold font-mono ${s.color}`}>{s.value}</span>
                         </div>
                       ))}
                     </div>
-                  )}
-
-                  {/* Quick stat cards */}
-                  <div className="mt-4 pt-3 border-t space-y-2" style={{ borderColor: 'var(--rule)' }}>
-                    <p className="text-[9px] uppercase font-bold tracking-wider text-slate-500 mb-2">Quick Stats</p>
-                    {[
-                      { label: 'Health Score', value: `${healthScore}/100`, color: healthScore >= 70 ? 'text-emerald-700' : healthScore >= 50 ? 'text-amber-700' : 'text-red-700' },
-                      { label: 'Monthly Spent', value: fmt(totals.month), color: 'text-slate-800' },
-                      { label: 'Remaining', value: fmt(Math.max(0, remainingSalary)), color: remainingSalary >= 0 ? 'text-emerald-700' : 'text-red-700' },
-                      { label: 'Risk Level', value: riskStatus.label, color: riskStatus.level === 'low' ? 'text-emerald-700' : riskStatus.level === 'medium' ? 'text-amber-700' : 'text-red-700' },
-                    ].map(s => (
-                      <div key={s.label} className="flex justify-between items-center text-[10px]">
-                        <span className="text-slate-500">{s.label}</span>
-                        <span className={`font-bold font-mono ${s.color}`}>{s.value}</span>
-                      </div>
-                    ))}
                   </div>
                 </div>
 
-                <div className="text-[10px] text-slate-500 pt-3 border-t mt-4" style={{ borderColor: 'var(--rule)' }}>
-                  Tap any chip above the chat or speak to ask the AI coach instantly.
-                </div>
               </div>
-
-            </div>
-          )}
+            );
+          })()}
 
           {/* ============================================================== */}
           {/* TAB 6: STATEMENT & INGESTION HUB */}
