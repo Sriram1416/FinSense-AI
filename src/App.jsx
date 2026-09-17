@@ -506,6 +506,7 @@ export default function PersonalLedger() {
   const [layoutDensity, setLayoutDensity] = useState('tight'); // 'tight', 'standard'
   const [errorMsg, setErrorMsg] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [showSettleHistory, setShowSettleHistory] = useState(false);
 
   // --- Roommates System State ---
   const [currentUser, setCurrentUser] = useState(null);
@@ -6420,46 +6421,68 @@ export default function PersonalLedger() {
                     </div>
                   )}
 
-                  {/* Recent Settlement Activity & Undo Section */}
+                  {/* Collapsible Recent Settlement Activity & Undo Section */}
                   {(() => {
                     const recentSettles = transactions.filter(t => t.is_shared && (t.category === 'System' || t.merchant?.startsWith('Settle:')));
                     if (recentSettles.length === 0) return null;
                     return (
                       <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
-                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center justify-between">
-                          <span>📜 Recent Dues Settlement Log ({recentSettles.length})</span>
-                          <span className="text-[9px] text-amber-700 italic font-normal">Accidental paid? Click Undo to revert!</span>
-                        </h4>
-                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                          {recentSettles.map(sTx => {
-                            const match = sTx.merchant?.match(/Settle:\s*(.*?)\s*to\s*(.*)/i);
-                            const payer = match ? match[1].trim() : sTx.logged_by;
-                            const payee = match ? match[2].trim() : 'Roommate';
-                            return (
-                              <div key={sTx.id} className="flex items-center justify-between gap-2 p-2 rounded bg-slate-50 border text-[11px]" style={{ borderColor: 'var(--rule)' }}>
-                                <div className="min-w-0 flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-emerald-600 font-bold">💳</span>
-                                  <span className="font-semibold text-slate-800 truncate">{payer}</span>
-                                  <span className="text-slate-400 text-[10px]">paid</span>
-                                  <span className="font-semibold text-slate-800 truncate">{payee}</span>
-                                  <span className="font-bold font-mono text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">{fmt(sTx.amount)}</span>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    if (window.confirm(`Revert / Undo ₹${sTx.amount} settlement payment from ${payer} to ${payee}?`)) {
-                                      await deleteTransaction(sTx.id);
-                                    }
-                                  }}
-                                  className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded text-[10px] font-bold transition flex items-center gap-1 flex-shrink-0 shadow-2xs cursor-pointer"
-                                  title="Click to revert/undo this payment and restore the original balance"
-                                >
-                                  ↩️ Undo
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowSettleHistory(!showSettleHistory)}
+                          className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100/80 border text-xs font-bold transition text-[var(--ink)]"
+                          style={{ borderColor: 'var(--rule)' }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">📜</span>
+                            <span>Payment History ({recentSettles.length})</span>
+                            <span className="text-[9px] font-normal px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
+                              Click to Undo
+                            </span>
+                          </div>
+                          <span className="text-slate-400 font-bold transition-transform duration-200" style={{ transform: showSettleHistory ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                            ▼
+                          </span>
+                        </button>
+
+                        {showSettleHistory && (
+                          <div className="mt-2 space-y-2 p-2.5 rounded-xl bg-white border animate-fadeIn" style={{ borderColor: 'var(--rule)' }}>
+                            <div className="flex justify-between items-center text-[10px] text-slate-500 font-medium px-1 pb-1 border-b" style={{ borderColor: 'var(--rule)' }}>
+                              <span>Logged Payments</span>
+                              <span>Action</span>
+                            </div>
+                            <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                              {recentSettles.map(sTx => {
+                                const match = sTx.merchant?.match(/Settle:\s*(.*?)\s*to\s*(.*)/i);
+                                const payer = match ? match[1].trim() : sTx.logged_by;
+                                const payee = match ? match[2].trim() : 'Roommate';
+                                return (
+                                  <div key={sTx.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 border text-[11px] hover:border-slate-300 transition" style={{ borderColor: 'var(--rule)' }}>
+                                    <div className="min-w-0 flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-emerald-600 font-bold">💳</span>
+                                      <span className="font-bold text-slate-800 truncate">{payer}</span>
+                                      <span className="text-slate-400 text-[10px]">paid</span>
+                                      <span className="font-bold text-slate-800 truncate">{payee}</span>
+                                      <span className="font-bold font-mono text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">{fmt(sTx.amount)}</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        if (window.confirm(`Revert / Undo ₹${sTx.amount} settlement payment from ${payer} to ${payee}?`)) {
+                                          await deleteTransaction(sTx.id);
+                                        }
+                                      }}
+                                      className="px-2.5 py-1 bg-red-100 hover:bg-red-200 active:bg-red-300 text-red-800 rounded-lg text-[10px] font-bold transition flex items-center gap-1 flex-shrink-0 shadow-2xs cursor-pointer"
+                                      title="Click to revert/undo this payment and restore original balance"
+                                    >
+                                      ↩️ Undo
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
