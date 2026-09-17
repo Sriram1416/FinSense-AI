@@ -2079,33 +2079,62 @@ export default function PersonalLedger() {
     let dailyRoomExpense = 0;
 
     for (const tx of transactions) {
-      if (tx.is_shared && tx.category !== 'System') {
-        const isSettleTx = tx.merchant?.startsWith('Settle:');
+      if (tx.is_shared) {
+        const isSettleTx = tx.category === 'System' || tx.merchant?.startsWith('Settle:') || tx.note?.includes('[source:settlement]') || tx.note?.includes('[source:manual]');
 
-        if (!isSettleTx) {
+        if (isSettleTx && tx.merchant?.startsWith('Settle:')) {
+          // Process 1-on-1 direct settlement payment transfer (e.g. Settle: Sri to Arul)
+          let fromName = tx.logged_by || resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
+          let toName = null;
+          
+          const match = tx.merchant?.match(/Settle:\s*(.*?)\s*to\s*(.*)/i);
+          if (match) {
+            fromName = match[1].trim();
+            toName = match[2].trim();
+          }
+
+          // Handle legacy vs new settlement amounts
+          let payAmt = tx.amount;
+          if (tx.note?.includes('[source:manual]') && tx.amount > 0 && N > 1) {
+            payAmt = Math.round(tx.amount / N);
+          }
+
+          const matchedFrom = memberNames.find(m => m.trim().toLowerCase() === fromName.trim().toLowerCase());
+          const matchedTo = toName ? memberNames.find(m => m.trim().toLowerCase() === toName.trim().toLowerCase()) : null;
+
+          // 1-on-1 Transfer:
+          // Payer (from) paid payAmt -> credited in totalPaidMap
+          // Recipient (to) received payAmt -> debited in totalPaidMap
+          // Third-party roommates (Karthik, etc.) are 100% UNTOUCHED!
+          if (matchedFrom && totalPaidMap[matchedFrom] !== undefined) {
+            totalPaidMap[matchedFrom] += payAmt;
+          }
+          if (matchedTo && totalPaidMap[matchedTo] !== undefined) {
+            totalPaidMap[matchedTo] -= payAmt;
+          }
+        } else if (tx.category !== 'System') {
+          // Regular shared room expense (food, rent, groceries)
           totalRoomExpense += tx.amount;
           if (tx.date === todayStr) dailyRoomExpense += tx.amount;
           if (tx.date >= startOfWeekStr) weeklyRoomExpense += tx.amount;
           if (tx.date.slice(0, 7) === curMonthStr) monthlyRoomExpense += tx.amount;
-        }
 
-        const payer = resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
-        const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
-        const activeDivisor = included.length > 0 ? included.length : 1;
-        const txShare = tx.amount / activeDivisor;
+          const payer = resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
+          const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
+          const activeDivisor = included.length > 0 ? included.length : 1;
+          const txShare = tx.amount / activeDivisor;
 
-        if (totalPaidMap[payer] !== undefined) {
-          totalPaidMap[payer] += tx.amount;
-          if (!isSettleTx) {
+          if (totalPaidMap[payer] !== undefined) {
+            totalPaidMap[payer] += tx.amount;
             txCountMap[payer] = (txCountMap[payer] || 0) + 1;
           }
-        }
 
-        included.forEach(name => {
-          if (memberOwedMap[name] !== undefined) {
-            memberOwedMap[name] += txShare;
-          }
-        });
+          included.forEach(name => {
+            if (memberOwedMap[name] !== undefined) {
+              memberOwedMap[name] += txShare;
+            }
+          });
+        }
       }
     }
 
@@ -3084,17 +3113,17 @@ export default function PersonalLedger() {
       }
     }
     
-    // Log an adjustment transaction:
-    // Payer (from) logs a shared transaction with amount * N so they get credited
+    // Log direct 1-on-1 settlement transaction:
+    // Stored with category 'System' and exact payment amount (e.g. ₹500)
     const adjustTx = {
       user_id: payerUserId,
       room_id: currentRoomId,
-      category: 'Other',
-      amount: numAmount * N, // mathematically offsets balances
+      category: 'System', // System category ensures exclusion from room expense totals
+      amount: numAmount,  // Actual settlement payment amount (e.g. ₹500)
       merchant: `Settle: ${from} to ${to}`,
-      note: `Direct roommates dues settlement logged by ${currentUser.name} [source:manual]`,
+      note: `Roommates dues payment of ₹${numAmount} logged by ${currentUser.name} [source:settlement]`,
       is_shared: true,
-      logged_by: from, // credited to the person who paid
+      logged_by: from,    // Payer
       date: isoDate(new Date())
     };
 
@@ -3104,10 +3133,10 @@ export default function PersonalLedger() {
         console.error('handleClearDuesDirect Supabase insert error details:', error);
         throw error;
       }
-      showToast('success', `Settled: Recorded ₹${numAmount} payment from ${from} to ${to}`);
+      showToast('success', `✅ Recorded ₹${numAmount} payment from ${from} to ${to}`);
       await fetchTransactions(session.user.id, currentRoomId);
     } catch (e) {
-      showToast('error', 'Error logging settlement.');
+      showToast('error', 'Error logging settlement payment.');
     }
   };
 
