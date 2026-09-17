@@ -6419,6 +6419,51 @@ export default function PersonalLedger() {
                       ))}
                     </div>
                   )}
+
+                  {/* Recent Settlement Activity & Undo Section */}
+                  {(() => {
+                    const recentSettles = transactions.filter(t => t.is_shared && (t.category === 'System' || t.merchant?.startsWith('Settle:')));
+                    if (recentSettles.length === 0) return null;
+                    return (
+                      <div className="mt-4 pt-3 border-t" style={{ borderColor: 'var(--rule)' }}>
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center justify-between">
+                          <span>📜 Recent Dues Settlement Log ({recentSettles.length})</span>
+                          <span className="text-[9px] text-amber-700 italic font-normal">Accidental paid? Click Undo to revert!</span>
+                        </h4>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                          {recentSettles.map(sTx => {
+                            const match = sTx.merchant?.match(/Settle:\s*(.*?)\s*to\s*(.*)/i);
+                            const payer = match ? match[1].trim() : sTx.logged_by;
+                            const payee = match ? match[2].trim() : 'Roommate';
+                            return (
+                              <div key={sTx.id} className="flex items-center justify-between gap-2 p-2 rounded bg-slate-50 border text-[11px]" style={{ borderColor: 'var(--rule)' }}>
+                                <div className="min-w-0 flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-emerald-600 font-bold">💳</span>
+                                  <span className="font-semibold text-slate-800 truncate">{payer}</span>
+                                  <span className="text-slate-400 text-[10px]">paid</span>
+                                  <span className="font-semibold text-slate-800 truncate">{payee}</span>
+                                  <span className="font-bold font-mono text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">{fmt(sTx.amount)}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (window.confirm(`Revert / Undo ₹${sTx.amount} settlement payment from ${payer} to ${payee}?`)) {
+                                      await handleDeleteTx(sTx.id);
+                                      showToast('success', `↩️ Reverted ₹${sTx.amount} settlement payment!`);
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded text-[10px] font-bold transition flex items-center gap-1 flex-shrink-0 shadow-2xs cursor-pointer"
+                                  title="Click to revert/undo this payment and restore the original balance"
+                                >
+                                  ↩️ Undo
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
