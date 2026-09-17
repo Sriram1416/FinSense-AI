@@ -6448,8 +6448,7 @@ export default function PersonalLedger() {
                                   type="button"
                                   onClick={async () => {
                                     if (window.confirm(`Revert / Undo ₹${sTx.amount} settlement payment from ${payer} to ${payee}?`)) {
-                                      await handleDeleteTx(sTx.id);
-                                      showToast('success', `↩️ Reverted ₹${sTx.amount} settlement payment!`);
+                                      await deleteTransaction(sTx.id);
                                     }
                                   }}
                                   className="px-2.5 py-1 bg-red-100 hover:bg-red-200 text-red-800 rounded text-[10px] font-bold transition flex items-center gap-1 flex-shrink-0 shadow-2xs cursor-pointer"
