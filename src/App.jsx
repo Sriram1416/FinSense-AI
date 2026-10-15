@@ -494,6 +494,12 @@ export default function PersonalLedger() {
   const [authName, setAuthName] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [resetSent, setResetSent] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   // --- UI & Theme Configuration ---
   const [loading, setLoading] = useState(true);
@@ -628,6 +634,11 @@ export default function PersonalLedger() {
   ]);
   const [goalForm, setGoalForm] = useState({ name: '', target: '', current: '', deadline: '' });
 
+  // --- Custom Period Audit State in Goals/Dues ---
+  const [customAuditStart, setCustomAuditStart] = useState('2026-09-03');
+  const [customAuditEnd, setCustomAuditEnd] = useState('2026-10-05');
+  const [showPeriodTxList, setShowPeriodTxList] = useState(false);
+
   // --- Smart Challenges State ---
   const [challenges, setChallenges] = useState([
     { id: 'c1', title: 'Zero Food Delivery Week', category: 'Food', targetSavings: 1500, durationDays: 7, startDate: isoDate(new Date()), isActive: true, isCompleted: false },
@@ -683,7 +694,18 @@ export default function PersonalLedger() {
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // Check if recovery token is present in URL hash
+    if (typeof window !== 'undefined' && window.location.hash && window.location.hash.includes('type=recovery')) {
+      setIsPasswordRecovery(true);
+    }
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true);
+        setSession(session);
+        setLoading(false);
+        return;
+      }
       setSession(session);
       if (session) {
         loadAllSupabase(session.user);
@@ -748,6 +770,68 @@ export default function PersonalLedger() {
       }
     } catch (e) {
       setErrorMsg(e.message || 'Authentication failed.');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleForgotPassword(e) {
+    if (e) e.preventDefault();
+    if (!authEmail || !authEmail.trim()) {
+      setErrorMsg('Please enter your email address to receive reset instructions.');
+      return;
+    }
+    setErrorMsg(null);
+    setAuthLoading(true);
+
+    try {
+      const redirectUrl = window.location.origin;
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), {
+        redirectTo: redirectUrl
+      });
+      if (error) throw error;
+      setResetSent(true);
+      showToast('success', 'Password reset email sent! Check your inbox.');
+    } catch (err) {
+      console.error('Password reset error:', err);
+      setErrorMsg(err.message || 'Unable to send password reset email.');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleUpdatePassword(e) {
+    if (e) e.preventDefault();
+    if (!newPassword || newPassword.length < 6) {
+      setErrorMsg('New password must be at least 6 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrorMsg('Passwords do not match. Please re-enter.');
+      return;
+    }
+    setErrorMsg(null);
+    setAuthLoading(true);
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+      if (error) throw error;
+      showToast('success', '✅ Password updated successfully!');
+      setIsPasswordRecovery(false);
+      setIsForgotPassword(false);
+      setShowChangePassword(false);
+      setNewPassword('');
+      setConfirmPassword('');
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.pathname);
+      }
+    } catch (err) {
+      console.error('Password update error:', err);
+      const msg = err.message || 'Failed to update password.';
+      setErrorMsg(msg);
+      showToast('error', msg);
     } finally {
       setAuthLoading(false);
     }
@@ -1839,6 +1923,33 @@ export default function PersonalLedger() {
     }));
   };
 
+  const handleSetAuditPreset = (preset) => {
+    const today = new Date();
+    const todayStr = isoDate(today);
+
+    if (preset === 'sep3_oct5') {
+      setCustomAuditStart('2026-09-03');
+      setCustomAuditEnd('2026-10-05');
+    } else if (preset === 'this_month') {
+      const start = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+      setCustomAuditStart(start);
+      setCustomAuditEnd(todayStr);
+    } else if (preset === 'last_month') {
+      const prevMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const prevMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+      setCustomAuditStart(isoDate(prevMonth));
+      setCustomAuditEnd(isoDate(prevMonthEnd));
+    } else if (preset === 'last_30_days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      setCustomAuditStart(isoDate(d));
+      setCustomAuditEnd(todayStr);
+    } else if (preset === 'all_time') {
+      setCustomAuditStart('2025-01-01');
+      setCustomAuditEnd(todayStr);
+    }
+  };
+
   const sendRoommateChatMessage = async (textVal) => {
     const text = textVal || roommateChatInput;
     if (!session || !currentRoomId || !text || !text.trim()) return;
@@ -2275,6 +2386,130 @@ export default function PersonalLedger() {
       mostActiveBuyer
     };
   }, [transactions, roommates, currentUser, todayStr, curMonthStr, shouldInjectRent, activeRentAmount, roomAdminName]);
+
+  // --- Custom Period Expense & Dues Calculation ---
+  const customPeriodAudit = useMemo(() => {
+    if (!customAuditStart || !customAuditEnd) {
+      return {
+        filteredTxs: [],
+        totalExpense: 0,
+        txCount: 0,
+        memberSummaries: [],
+        duesList: [],
+        categoryBreakdown: {}
+      };
+    }
+
+    const isPersonal = analysisType === 'personal';
+    const baseTxs = transactions.filter(t => (isPersonal ? !t.is_shared : t.is_shared) && t.category !== 'System');
+    const filteredTxs = baseTxs.filter(t => t.date >= customAuditStart && t.date <= customAuditEnd);
+    filteredTxs.sort((a, b) => b.date.localeCompare(a.date));
+
+    const totalExpense = filteredTxs.reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const categoryBreakdown = {};
+    filteredTxs.forEach(t => {
+      categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + Number(t.amount);
+    });
+
+    if (isPersonal) {
+      return {
+        filteredTxs,
+        totalExpense,
+        txCount: filteredTxs.length,
+        memberSummaries: [],
+        duesList: [],
+        categoryBreakdown
+      };
+    }
+
+    const memberNames = [];
+    if (currentUser) memberNames.push(currentUser.name);
+    roommates.forEach(r => memberNames.push(r.name));
+
+    const totalPaidMap = {};
+    const memberOwedMap = {};
+    const memberTxCountMap = {};
+    memberNames.forEach(name => {
+      totalPaidMap[name] = 0;
+      memberOwedMap[name] = 0;
+      memberTxCountMap[name] = 0;
+    });
+
+    filteredTxs.forEach(tx => {
+      const payer = resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
+      const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
+      const activeDivisor = included.length > 0 ? included.length : 1;
+      const txShare = Number(tx.amount) / activeDivisor;
+
+      if (totalPaidMap[payer] !== undefined) {
+        totalPaidMap[payer] += Number(tx.amount);
+        memberTxCountMap[payer] = (memberTxCountMap[payer] || 0) + 1;
+      }
+      included.forEach(name => {
+        if (memberOwedMap[name] !== undefined) {
+          memberOwedMap[name] += txShare;
+        }
+      });
+    });
+
+    const balances = {};
+    const memberSummaries = memberNames.map(name => {
+      const paid = totalPaidMap[name] || 0;
+      const owed = memberOwedMap[name] || 0;
+      const bal = paid - owed;
+      balances[name] = Math.round(bal);
+
+      let status = 'Settled';
+      if (bal > 0.5) status = 'Owed';
+      else if (bal < -0.5) status = 'Owes';
+
+      return {
+        name,
+        paid: Math.round(paid),
+        share: Math.round(owed),
+        balance: Math.round(bal),
+        amountToPay: bal < -0.5 ? Math.round(-bal) : 0,
+        amountToReceive: bal > 0.5 ? Math.round(bal) : 0,
+        txCount: memberTxCountMap[name] || 0,
+        status
+      };
+    });
+
+    const debtors = [];
+    const creditors = [];
+    Object.entries(balances).forEach(([name, bal]) => {
+      if (bal < -0.5) debtors.push({ name, bal: -bal });
+      if (bal > 0.5) creditors.push({ name, bal });
+    });
+
+    const duesList = [];
+    let dIdx = 0;
+    let cIdx = 0;
+    while (dIdx < debtors.length && cIdx < creditors.length) {
+      const debtor = debtors[dIdx];
+      const creditor = creditors[cIdx];
+      const transfer = Math.min(debtor.bal, creditor.bal);
+      duesList.push({
+        from: debtor.name,
+        to: creditor.name,
+        amount: Math.round(transfer)
+      });
+      debtor.bal -= transfer;
+      creditor.bal -= transfer;
+      if (debtor.bal <= 1) dIdx++;
+      if (creditor.bal <= 1) cIdx++;
+    }
+
+    return {
+      filteredTxs,
+      totalExpense,
+      txCount: filteredTxs.length,
+      memberSummaries,
+      duesList,
+      categoryBreakdown
+    };
+  }, [transactions, customAuditStart, customAuditEnd, analysisType, roommates, currentUser, roomAdminId]);
 
   const roommateChatMessages = useMemo(() => {
     return transactions
@@ -3158,7 +3393,22 @@ export default function PersonalLedger() {
   };
 
   // Period-based Excel export
-  const exportToExcelCustom = (period = 'all') => {
+  const exportToExcelCustom = (period = 'all', customRange = null) => {
+    let startDate = null;
+    let endDate = null;
+    let customLabel = null;
+    if (typeof period === 'object' && period !== null) {
+      startDate = period.startDate;
+      endDate = period.endDate;
+      customLabel = period.label;
+      period = 'custom';
+    } else if (customRange && customRange.startDate && customRange.endDate) {
+      startDate = customRange.startDate;
+      endDate = customRange.endDate;
+      customLabel = customRange.label;
+      period = 'custom';
+    }
+
     const today = new Date();
     const todayStr = isoDate(today);
 
@@ -3194,10 +3444,15 @@ export default function PersonalLedger() {
     } else if (period === 'year') {
       filtered = baseTxs.filter(t => t.date >= yearStartStr && t.date <= todayStr);
       label = `${modeLabel}_Year_${today.getFullYear()}`;
+    } else if (period === 'custom' && startDate && endDate) {
+      filtered = baseTxs.filter(t => t.date >= startDate && t.date <= endDate);
+      label = customLabel || `${modeLabel}_${startDate}_to_${endDate}`;
     }
 
+    const displayPeriodName = period === 'custom' ? `${startDate} to ${endDate}` : period;
+
     if (filtered.length === 0) {
-      showToast('error', `No transactions found for: ${period}`);
+      showToast('error', `No transactions found for: ${displayPeriodName}`);
       return;
     }
 
@@ -3219,7 +3474,7 @@ export default function PersonalLedger() {
       const summaryRows = [
         ["FINSENSE - PERSONAL EXPENSES SUMMARY"],
         ["Export Date:", new Date().toLocaleDateString('en-IN')],
-        ["Period:", period.toUpperCase()],
+        ["Period:", displayPeriodName.toUpperCase()],
         [],
         ["1. PERSONAL OVERVIEW"],
         ["Total Spend", totalPersonal],
@@ -3361,7 +3616,7 @@ export default function PersonalLedger() {
       const summaryRows = [
         ["FINSENSE - ROOMMATE EXPENSES SUMMARY"],
         ["Export Date:", new Date().toLocaleDateString('en-IN')],
-        ["Period:", period.toUpperCase()],
+        ["Period:", displayPeriodName.toUpperCase()],
         [],
         ["1. GROUP OVERVIEW"],
         ["Total Shared Expense (excluding Rent)", otherSharedTotal],
@@ -3413,6 +3668,7 @@ export default function PersonalLedger() {
       ];
 
       filtered.forEach(t => {
+        const payer = resolvePayerName(t, memberNames, roommates, currentUser, roomAdminId);
         const included = getIncludedMembersForTx(t, memberNames, roommates, currentUser);
         const activeDivisor = included.length > 0 ? included.length : 1;
         const isPartial = t.splitMembers ? t.splitMembers.length < memberNames.length : (t.splitCount && t.splitCount > 0);
@@ -3427,7 +3683,7 @@ export default function PersonalLedger() {
           t.category,
           t.merchant,
           t.note || '',
-          t.logged_by,
+          payer,
           splitModeStr,
           t.amount,
           Math.round(txShare),
@@ -3454,11 +3710,26 @@ export default function PersonalLedger() {
     }
 
     XLSX.writeFile(wb, `FinSense_${label}.xlsx`);
-    showToast('success', `Downloaded: ${filtered.length} entries for ${period}`);
+    showToast('success', `Downloaded: ${filtered.length} entries for ${displayPeriodName}`);
   };
 
   // Period-based PDF export
-  const exportToPDFCustom = (period = 'all') => {
+  const exportToPDFCustom = (period = 'all', customRange = null) => {
+    let startDate = null;
+    let endDate = null;
+    let customLabel = null;
+    if (typeof period === 'object' && period !== null) {
+      startDate = period.startDate;
+      endDate = period.endDate;
+      customLabel = period.label;
+      period = 'custom';
+    } else if (customRange && customRange.startDate && customRange.endDate) {
+      startDate = customRange.startDate;
+      endDate = customRange.endDate;
+      customLabel = customRange.label;
+      period = 'custom';
+    }
+
     const today = new Date();
     const todayStr = isoDate(today);
 
@@ -3493,9 +3764,12 @@ export default function PersonalLedger() {
     } else if (period === 'year') {
       filtered = baseTxs.filter(t => t.date >= yearStartStr && t.date <= todayStr);
       periodLabel = `This Year (${today.getFullYear()})`;
+    } else if (period === 'custom' && startDate && endDate) {
+      filtered = baseTxs.filter(t => t.date >= startDate && t.date <= endDate);
+      periodLabel = customLabel ? customLabel.replace(/_/g, ' ') : `Custom Period (${startDate} to ${endDate})`;
     }
 
-    if (!isPersonal && shouldInjectRent && period !== 'today') {
+    if (!isPersonal && shouldInjectRent && period !== 'today' && period !== 'custom') {
       filtered = [
         ...filtered,
         {
@@ -3513,8 +3787,10 @@ export default function PersonalLedger() {
       ];
     }
 
+    const displayPeriodName = period === 'custom' ? `${startDate} to ${endDate}` : period;
+
     if (filtered.length === 0) {
-      showToast('error', `No transactions found for: ${period}`);
+      showToast('error', `No transactions found for: ${displayPeriodName}`);
       return;
     }
 
@@ -3530,228 +3806,532 @@ export default function PersonalLedger() {
       return;
     }
 
+    // Helper functions for date and currency formatting
+    const formatPDFDate = (dateStr) => {
+      if (!dateStr) return '';
+      const parts = String(dateStr).split('-');
+      if (parts.length === 3) {
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const d = parts[2];
+        const m = months[parseInt(parts[1], 10) - 1] || parts[1];
+        const y = parts[0];
+        return `${d} ${m} ${y}`;
+      }
+      return dateStr;
+    };
+
+    const formatPDFDateTime = () => {
+      const now = new Date();
+      const day = now.getDate();
+      const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      const month = months[now.getMonth()];
+      const year = now.getFullYear();
+      let hours = now.getHours();
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      hours = hours ? hours : 12;
+      return `${day} ${month} ${year}, ${String(hours).padStart(2, '0')}:${minutes} ${ampm}`;
+    };
+
+    // Theme Palettes
+    const themePalettes = {
+      royal: {
+        name: 'Royal Blue',
+        primary: '#1E3A8A',
+        primaryLight: '#EFF6FF',
+        accent: '#2563EB',
+        accentSoft: '#DBEAFE',
+        tableHeaderBg: '#1E3A8A',
+        cardBg: '#F8FAFC',
+        cardBorder: '#E2E8F0',
+        memberBoxBg: '#F1F5F9',
+        memberBorder: '#1E3A8A',
+        textDark: '#0F172A',
+        textMuted: '#64748B',
+        badgeBg: '#EFF6FF'
+      },
+      emerald: {
+        name: 'Emerald Forest',
+        primary: '#065F46',
+        primaryLight: '#ECFDF5',
+        accent: '#059669',
+        accentSoft: '#D1FAE5',
+        tableHeaderBg: '#065F46',
+        cardBg: '#F0FDF4',
+        cardBorder: '#D1FAE5',
+        memberBoxBg: '#E6F4EA',
+        memberBorder: '#065F46',
+        textDark: '#064E3B',
+        textMuted: '#4B6B58',
+        badgeBg: '#ECFDF5'
+      },
+      cocoa: {
+        name: 'White & Brown',
+        primary: '#3D1F00',
+        primaryLight: '#FAF5EE',
+        accent: '#7C5B3A',
+        accentSoft: '#EFE7DC',
+        tableHeaderBg: '#3D1F00',
+        cardBg: '#FAF7F2',
+        cardBorder: '#E8DEC9',
+        memberBoxBg: '#F3ECE1',
+        memberBorder: '#7C5B3A',
+        textDark: '#261505',
+        textMuted: '#7C5B3A',
+        badgeBg: '#FAF5EE'
+      },
+      dark: {
+        name: 'Modern Slate',
+        primary: '#0F172A',
+        primaryLight: '#F8FAFC',
+        accent: '#4F46E5',
+        accentSoft: '#E0E7FF',
+        tableHeaderBg: '#0F172A',
+        cardBg: '#F8FAFC',
+        cardBorder: '#CBD5E1',
+        memberBoxBg: '#F1F5F9',
+        memberBorder: '#4F46E5',
+        textDark: '#0F172A',
+        textMuted: '#64748B',
+        badgeBg: '#F1F5F9'
+      },
+      beige: {
+        name: 'Vintage Beige',
+        primary: '#1E2A44',
+        primaryLight: '#FBF9F3',
+        accent: '#3B5998',
+        accentSoft: '#E7DCC2',
+        tableHeaderBg: '#1E2A44',
+        cardBg: '#F7F3E8',
+        cardBorder: '#D9CBA3',
+        memberBoxBg: '#EFE9D9',
+        memberBorder: '#3B5998',
+        textDark: '#1A202C',
+        textMuted: '#5A6483',
+        badgeBg: '#FBF9F3'
+      },
+      light: {
+        name: 'Professional Light',
+        primary: '#1E3A8A',
+        primaryLight: '#EFF6FF',
+        accent: '#2563EB',
+        accentSoft: '#DBEAFE',
+        tableHeaderBg: '#1E3A8A',
+        cardBg: '#F8FAFC',
+        cardBorder: '#E2E8F0',
+        memberBoxBg: '#EEF2F6',
+        memberBorder: '#1E3A8A',
+        textDark: '#0F172A',
+        textMuted: '#64748B',
+        badgeBg: '#EFF6FF'
+      }
+    };
+
+    const th = themePalettes[themeMode] || themePalettes.royal;
+    const roomTitle = isPersonal ? 'PERSONAL EXPENSE STATEMENT' : 'NAMMA ROOM';
+    const subTitle = isPersonal ? 'Official Personal Expense Statement & Financial Audit' : 'Official Room Expense Statement & Financial Audit';
+
     // Start HTML
     let html = `
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
-        <title>SmartSave Expense Report - ${modeLabel} (${periodLabel})</title>
+        <meta charset="utf-8" />
+        <title>${roomTitle} - ${subTitle}</title>
         <style>
-          @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=JetBrains+Mono:wght@400;700&display=swap');
-          
-          body {
-            font-family: 'Outfit', sans-serif;
-            background-color: #FBF8F0;
-            color: #1E2229;
-            margin: 0;
-            padding: 40px;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+          @page {
+            size: A4 portrait;
+            margin: 12mm 14mm 16mm 14mm;
+            @bottom-left {
+              content: "Room Expense Statement - ${roomTitle}";
+              font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+              font-size: 7.5pt;
+              color: #94A3B8;
+            }
+            @bottom-right {
+              content: "Page " counter(page) " of " counter(pages);
+              font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+              font-size: 7.5pt;
+              color: #94A3B8;
+            }
           }
-          
-          .header {
-            border-bottom: 2px solid #1E2229;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
+
+          * {
+            box-sizing: border-box;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+
+          body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #0F172A;
+            background: #FFFFFF;
+            margin: 0;
+            padding: 20px 24px;
+            line-height: 1.35;
+            font-size: 9pt;
+          }
+
+          /* Header */
+          .doc-header {
             display: flex;
             justify-content: space-between;
-            align-items: flex-end;
+            align-items: flex-start;
+            padding-bottom: 12px;
+            border-bottom: 2px solid ${th.cardBorder || '#E2E8F0'};
+            margin-bottom: 14px;
           }
-          
-          .title {
-            margin: 0;
-            font-size: 26px;
+          .doc-title {
+            font-size: 20pt;
             font-weight: 800;
-            text-transform: uppercase;
+            color: ${th.primary};
             letter-spacing: -0.5px;
-          }
-          
-          .meta {
-            font-size: 11px;
+            margin: 0;
+            line-height: 1.1;
             text-transform: uppercase;
+          }
+          .doc-subtitle {
+            font-size: 9pt;
+            color: #64748B;
+            margin-top: 4px;
+            font-weight: 500;
+          }
+          .doc-period-pill {
+            display: inline-block;
+            margin-top: 5px;
+            font-size: 7.5pt;
             font-weight: 600;
-            color: #6B7280;
-            letter-spacing: 0.5px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            background: ${th.primaryLight};
+            color: ${th.primary};
+            border: 1px solid ${th.accentSoft};
+          }
+          .doc-meta {
+            text-align: right;
+            font-size: 8pt;
+            color: #64748B;
+          }
+          .doc-meta-value {
+            font-weight: 700;
+            color: #0F172A;
+            margin-top: 2px;
           }
 
-          .date-stamp {
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 11px;
-            text-align: right;
-          }
-          
-          .summary-grid {
+          /* KPI Summary Cards Grid */
+          .kpi-container {
+            background: ${th.cardBg};
+            border: 1px solid ${th.cardBorder};
+            border-radius: 10px;
+            padding: 12px 14px;
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            page-break-inside: avoid;
+            break-inside: avoid;
           }
-          
-          .summary-card {
-            background-color: #FAF6ED;
-            border: 1px solid #1E2229;
-            padding: 15px;
-            border-radius: 4px;
-            box-shadow: 2px 2px 0px #1E2229;
+          .kpi-item {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
           }
-          
-          .summary-card-title {
-            font-size: 10px;
-            font-weight: 800;
+          .kpi-label {
+            font-size: 7.5pt;
+            font-weight: 600;
             text-transform: uppercase;
-            color: #6B7280;
             letter-spacing: 0.5px;
+            color: #64748B;
+            margin-bottom: 3px;
           }
-          
-          .summary-card-value {
+          .kpi-val {
+            font-size: 13pt;
+            font-weight: 800;
+            color: #0F172A;
             font-family: 'JetBrains Mono', monospace;
-            font-size: 18px;
-            font-weight: 700;
-            margin-top: 5px;
+            letter-spacing: -0.3px;
           }
-          
+          .kpi-val-primary {
+            color: ${th.primary};
+          }
+          .kpi-val-accent {
+            color: #D97706;
+          }
+          .kpi-val-success {
+            color: #059669;
+          }
+
+          /* Section Headers */
+          .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-top: 18px;
+            margin-bottom: 6px;
+            padding-bottom: 3px;
+            page-break-after: avoid;
+            break-after: avoid;
+          }
           .section-title {
-            font-size: 14px;
+            font-size: 10pt;
             font-weight: 800;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 12px;
-            border-left: 4px solid #1E2229;
-            padding-left: 8px;
+            color: ${th.primary};
+            letter-spacing: 0.2px;
+            margin: 0;
           }
-          
-          table {
+          .section-subtitle {
+            font-size: 8pt;
+            color: #64748B;
+            font-style: italic;
+          }
+          .section-desc {
+            font-size: 8pt;
+            color: #64748B;
+            margin-top: -3px;
+            margin-bottom: 8px;
+          }
+
+          /* Tables */
+          table.data-table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 40px;
+            font-size: 8.5pt;
+            margin-bottom: 18px;
           }
-          
-          th {
-            background-color: #1E2229;
-            color: #FBF8F0;
-            text-align: left;
-            padding: 8px 12px;
-            font-size: 10px;
+          table.data-table thead {
+            display: table-header-group;
+          }
+          table.data-table th {
+            background-color: ${th.tableHeaderBg};
+            color: #FFFFFF;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 800;
+            font-size: 7.5pt;
+            letter-spacing: 0.3px;
+            padding: 6px 9px;
+            border: 1px solid ${th.tableHeaderBg};
           }
-          
-          td {
-            padding: 10px 12px;
-            font-size: 12px;
-            border-bottom: 1px solid #E5E7EB;
+          table.data-table td {
+            padding: 5.5px 9px;
+            border: 1px solid #CBD5E1;
+            color: #0F172A;
           }
-          
-          tr:last-child td {
-            border-bottom: 2px solid #1E2229;
+          table.data-table tr {
+            page-break-inside: avoid;
+            break-inside: avoid;
           }
-          
-          .text-right {
-            text-align: right;
-          }
-          
-          .mono {
-            font-family: 'JetBrains Mono', monospace;
+          table.data-table tr:nth-child(even) td {
+            background-color: #F8FAFC;
           }
 
-          .badge {
-            display: inline-block;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-size: 9px;
-            font-weight: 800;
-            text-transform: uppercase;
-            border: 1px solid currentColor;
-          }
+          .text-right { text-align: right; }
+          .text-center { text-align: center; }
+          .mono { font-family: 'JetBrains Mono', monospace; }
+          .font-bold { font-weight: 700; }
 
-          .badge-recv {
-            color: #065F46;
-            background-color: #D1FAE5;
+          /* Badges */
+          .status-gets-back {
+            color: #047857;
+            font-weight: 700;
           }
-
-          .badge-pay {
-            color: #991B1B;
-            background-color: #FEE2E2;
+          .status-owes {
+            color: #B91C1C;
+            font-weight: 700;
           }
-
-          .badge-settled {
-            color: #374151;
-            background-color: #F3F4F6;
-          }
-          
-          .footer {
-            margin-top: 50px;
-            border-top: 1px solid #E5E7EB;
-            padding-top: 15px;
-            text-align: center;
-            font-size: 10px;
-            color: #9CA3AF;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+          .status-settled {
+            color: #64748B;
             font-weight: 600;
           }
-          
-          @media print {
-            body {
-              padding: 0;
-              background-color: #FFFFFF;
-            }
-            .summary-card {
-              box-shadow: none;
-              background-color: #FFFFFF;
-            }
+
+          /* Member Breakdown Cards in Section 2 */
+          .member-card {
+            margin-bottom: 12px;
+            border: 1px solid #E2E8F0;
+            border-radius: 6px;
+            overflow: hidden;
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .member-card-bar {
+            background: ${th.memberBoxBg};
+            padding: 6px 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-left: 4px solid ${th.primary};
+          }
+          .member-card-title {
+            font-size: 9.5pt;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: ${th.primary};
+          }
+          .member-card-spent-pct {
+            font-size: 8pt;
+            font-weight: 500;
+            color: #64748B;
+            text-transform: none;
+          }
+          .member-card-paid {
+            font-size: 9.5pt;
+            font-weight: 800;
+            color: ${th.primary};
+            font-family: 'JetBrains Mono', monospace;
+          }
+          .member-card-subbar {
+            padding: 4px 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 8pt;
+            color: #475569;
+            background: #FFFFFF;
+            border-bottom: 1px dashed #E2E8F0;
+          }
+          .member-items-wrap {
+            padding: 6px 12px 8px 12px;
+            background: #FFFFFF;
+          }
+          .member-items-header {
+            font-size: 8pt;
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 4px;
+          }
+          .member-item-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-size: 7.5pt;
+            padding: 1.5px 0 1.5px 10px;
+            color: #334155;
+          }
+          .member-item-left {
+            flex: 1;
+            padding-right: 12px;
+          }
+          .member-item-bullet {
+            color: #94A3B8;
+            margin-right: 4px;
+          }
+          .member-item-amt {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: #0F172A;
+            flex-shrink: 0;
+          }
+
+          /* Screen/fallback footer */
+          .doc-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 24px;
+            padding-top: 8px;
+            border-top: 1px solid #E2E8F0;
+            font-size: 7.5pt;
+            color: #94A3B8;
           }
         </style>
       </head>
       <body>
-        <div class="header">
+        <div class="doc-header">
           <div>
-            <span class="meta">SmartSave Financial Statement</span>
-            <h1 class="title">${modeLabel} Report</h1>
-            <span class="meta" style="color: #1E2229;">Period: ${periodLabel}</span>
+            <h1 class="doc-title">${roomTitle}</h1>
+            <div class="doc-subtitle">${subTitle}</div>
+            <div class="doc-period-pill">Statement Period: ${periodLabel}</div>
           </div>
-          <div class="date-stamp">
-            Generated: ${new Date().toLocaleString('en-IN')}<br>
-            Mode: ${isPersonal ? 'Bachelor Personal' : 'Roommates Split'}
+          <div class="doc-meta">
+            <div>Generated:</div>
+            <div class="doc-meta-value">${formatPDFDateTime()}</div>
           </div>
         </div>
     `;
 
     if (isPersonal) {
-      const remaining = salary - total;
+      // --- PERSONAL MODE PDF REPORT ---
+      const totalPersonal = filtered.reduce((s, t) => s + Number(t.amount), 0);
+      const remaining = salary - totalPersonal;
       const savingsPct = salary > 0 ? Math.round((remaining / salary) * 100) : 0;
 
-      // Personal Summary Cards
+      const categoryBreakdown = {};
+      filtered.forEach(t => {
+        categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + Number(t.amount);
+      });
+      const catEntries = Object.entries(categoryBreakdown).sort((a, b) => b[1] - a[1]);
+      const topCat = catEntries[0] || ['Other', 0];
+      const topCatName = topCat[0];
+      const topCatPct = totalPersonal > 0 ? ((topCat[1] / totalPersonal) * 100).toFixed(1) : '0';
+
       html += `
-        <div class="summary-grid">
-          <div class="summary-card">
-            <div class="summary-card-title">Monthly Income</div>
-            <div class="summary-card-value">₹${salary.toLocaleString('en-IN')}</div>
+        <div class="kpi-container">
+          <div class="kpi-item">
+            <div class="kpi-label">Total Expenses</div>
+            <div class="kpi-val kpi-val-primary">INR ${totalPersonal.toFixed(2)}</div>
           </div>
-          <div class="summary-card">
-            <div class="summary-card-title">Total Expense</div>
-            <div class="summary-card-value">₹${total.toLocaleString('en-IN')}</div>
+          <div class="kpi-item">
+            <div class="kpi-label">Total Entries</div>
+            <div class="kpi-val">${filtered.length} Expenses</div>
           </div>
-          <div class="summary-card">
-            <div class="summary-card-title">Remaining Balance</div>
-            <div class="summary-card-value">₹${remaining.toLocaleString('en-IN')}</div>
+          <div class="kpi-item">
+            <div class="kpi-label">Top Category</div>
+            <div class="kpi-val">${topCatName} (${topCatPct}%)</div>
           </div>
-          <div class="summary-card">
-            <div class="summary-card-title">Savings Rate</div>
-            <div class="summary-card-value">${savingsPct}%</div>
+          <div class="kpi-item">
+            <div class="kpi-label">Remaining Balance</div>
+            <div class="kpi-val ${remaining >= 0 ? 'kpi-val-success' : 'kpi-val-accent'}">
+              INR ${remaining.toFixed(2)}
+            </div>
           </div>
         </div>
 
-        <div class="section-title">Expense Itemization</div>
-        <table>
+        <div class="section-header">
+          <h2 class="section-title">1. CATEGORY SPENDING OVERVIEW</h2>
+          <span class="section-subtitle">Breakdown of personal spending</span>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width: 40%;">Category</th>
+              <th style="width: 30%;" class="text-right">Amount (INR)</th>
+              <th style="width: 30%;" class="text-right">Percentage (%)</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      catEntries.forEach(([cat, amt]) => {
+        const pct = totalPersonal > 0 ? ((amt / totalPersonal) * 100).toFixed(1) : '0';
+        html += `
+          <tr>
+            <td><strong>${cat}</strong></td>
+            <td class="text-right mono font-bold">INR ${Number(amt).toFixed(2)}</td>
+            <td class="text-right mono">${pct}%</td>
+          </tr>
+        `;
+      });
+
+      html += `
+          </tbody>
+        </table>
+
+        <div class="section-header">
+          <h2 class="section-title">2. DETAILED PERSONAL EXPENSE LEDGER</h2>
+          <span class="section-subtitle">Full chronological audit of personal expenses</span>
+        </div>
+        <table class="data-table">
           <thead>
             <tr>
               <th style="width: 15%;">Date</th>
               <th style="width: 15%;">Day</th>
               <th style="width: 20%;">Category</th>
-              <th style="width: 35%;">Description (Merchant/Note)</th>
-              <th style="width: 15%; text-align: right;">Amount</th>
+              <th style="width: 35%;">Description (Merchant / Note)</th>
+              <th style="width: 15%; text-align: right;">Amount (INR)</th>
             </tr>
           </thead>
           <tbody>
@@ -3759,14 +4339,14 @@ export default function PersonalLedger() {
 
       filtered.forEach(t => {
         const dayName = new Date(t.date).toLocaleDateString('en-IN', { weekday: 'long' });
-        const desc = t.note ? `${t.merchant} (${t.note})` : t.merchant;
+        const desc = t.note ? (t.merchant ? `${t.merchant} (${t.note})` : t.note) : (t.merchant || 'Expense');
         html += `
           <tr>
-            <td class="mono">${t.date}</td>
+            <td class="mono">${formatPDFDate(t.date)}</td>
             <td>${dayName}</td>
-            <td>${t.category}</td>
+            <td><strong>${t.category}</strong></td>
             <td>${desc}</td>
-            <td class="text-right mono font-bold">₹${Number(t.amount).toLocaleString('en-IN')}</td>
+            <td class="text-right mono font-bold">INR ${Number(t.amount).toFixed(2)}</td>
           </tr>
         `;
       });
@@ -3777,130 +4357,147 @@ export default function PersonalLedger() {
       `;
 
     } else {
-      // Roommates Split Mode
-      const count = roommates.length + 1;
-      const share = total / count;
+      // --- ROOMMATES SPLIT MODE (NAMMA ROOM AUDIT STATEMENT) ---
+      const memberNames = [];
+      if (currentUser) memberNames.push(currentUser.name);
+      roommates.forEach(r => memberNames.push(r.name));
 
-      const balances = {};
       const totalPaidMap = {};
-      
-      const allNames = [currentUser?.name || 'Me', ...roommates.map(r => r.name)].filter(Boolean);
-      allNames.forEach(name => {
-        balances[name] = 0;
+      const memberOwedMap = {};
+      const payerTxMap = {};
+      memberNames.forEach(name => {
         totalPaidMap[name] = 0;
+        memberOwedMap[name] = 0;
+        payerTxMap[name] = [];
       });
 
+      let totalRoomExpense = 0;
       filtered.forEach(tx => {
         if (tx.id === 'virtual-rent') return;
-        const payer = tx.logged_by;
-        const txShare = Number(tx.amount) / count;
-        
+        totalRoomExpense += Number(tx.amount);
+        const payer = resolvePayerName(tx, memberNames, roommates, currentUser, roomAdminId);
+        const included = getIncludedMembersForTx(tx, memberNames, roommates, currentUser);
+        const activeDivisor = included.length > 0 ? included.length : 1;
+        const txShare = Number(tx.amount) / activeDivisor;
+
         if (totalPaidMap[payer] !== undefined) {
           totalPaidMap[payer] += Number(tx.amount);
+          if (!payerTxMap[payer]) payerTxMap[payer] = [];
+          payerTxMap[payer].push(tx);
         }
-        
-        allNames.forEach(name => {
-          if (balances[name] !== undefined) {
-            if (name === payer) {
-              balances[name] += Number(tx.amount) - txShare;
-            } else {
-              balances[name] -= txShare;
-            }
+        included.forEach(name => {
+          if (memberOwedMap[name] !== undefined) {
+            memberOwedMap[name] += txShare;
           }
         });
+      });
+
+      const memberSummaries = memberNames.map(name => {
+        const paid = totalPaidMap[name] || 0;
+        const share = memberOwedMap[name] || 0;
+        const bal = paid - share;
+        const pctSpend = totalRoomExpense > 0 ? ((paid / totalRoomExpense) * 100) : 0;
+        return {
+          name,
+          paid,
+          share,
+          bal,
+          pctSpend,
+          txs: payerTxMap[name] || []
+        };
       });
 
       // Calculate dues List for this specific filtered period
       const debtors = [];
       const creditors = [];
-      Object.entries(balances).forEach(([name, bal]) => {
-        if (bal < -0.99) debtors.push({ name, bal: -bal });
-        if (bal > 0.99) creditors.push({ name, bal });
+      memberSummaries.forEach(m => {
+        if (m.bal < -0.01) debtors.push({ name: m.name, bal: -m.bal });
+        if (m.bal > 0.01) creditors.push({ name: m.name, bal: m.bal });
       });
+
+      const totalDueAmount = debtors.reduce((sum, d) => sum + d.bal, 0);
 
       const periodDuesList = [];
       let dIdx = 0;
       let cIdx = 0;
-      while (dIdx < debtors.length && cIdx < creditors.length) {
-        const debtor = debtors[dIdx];
-        const creditor = creditors[cIdx];
+      const dList = debtors.map(d => ({ ...d }));
+      const cList = creditors.map(c => ({ ...c }));
+      while (dIdx < dList.length && cIdx < cList.length) {
+        const debtor = dList[dIdx];
+        const creditor = cList[cIdx];
         const transfer = Math.min(debtor.bal, creditor.bal);
-        periodDuesList.push({
-          from: debtor.name,
-          to: creditor.name,
-          amount: Math.round(transfer)
-        });
+        if (transfer > 0.009) {
+          periodDuesList.push({
+            from: debtor.name,
+            to: creditor.name,
+            amount: transfer,
+            instruction: `${debtor.name} pays ${creditor.name} INR ${transfer.toFixed(2)}`
+          });
+        }
         debtor.bal -= transfer;
         creditor.bal -= transfer;
-        if (debtor.bal <= 1) dIdx++;
-        if (creditor.bal <= 1) cIdx++;
+        if (debtor.bal <= 0.01) dIdx++;
+        if (creditor.bal <= 0.01) cIdx++;
       }
 
-      // Roommate Summary Cards
+      // Top 4 KPI Cards
       html += `
-        <div class="summary-grid">
-          <div class="summary-card">
-            <div class="summary-card-title">Total Room Expense</div>
-            <div class="summary-card-value">₹${Math.round(total).toLocaleString('en-IN')}</div>
+        <div class="kpi-container">
+          <div class="kpi-item">
+            <div class="kpi-label">Total Expenses</div>
+            <div class="kpi-val kpi-val-primary">INR ${totalRoomExpense.toFixed(2)}</div>
           </div>
-          <div class="summary-card">
-            <div class="summary-card-title">Total Roommates</div>
-            <div class="summary-card-value">${count} members</div>
+          <div class="kpi-item">
+            <div class="kpi-label">Total Members</div>
+            <div class="kpi-val">${memberNames.length} Members</div>
           </div>
-          <div class="summary-card">
-            <div class="summary-card-title">Per Person Share</div>
-            <div class="summary-card-value">₹${Math.round(share).toLocaleString('en-IN')}</div>
+          <div class="kpi-item">
+            <div class="kpi-label">Total Entries</div>
+            <div class="kpi-val">${filtered.length} Expenses</div>
           </div>
-          <div class="summary-card">
-            <div class="summary-card-title">Pending Settlements</div>
-            <div class="summary-card-value">${periodDuesList.length} transfers</div>
+          <div class="kpi-item">
+            <div class="kpi-label">Ledger Status</div>
+            <div class="kpi-val ${totalDueAmount > 0.01 ? 'kpi-val-accent' : 'kpi-val-success'}">
+              ${totalDueAmount > 0.01 ? `INR ${totalDueAmount.toFixed(2)} Due` : 'INR 0.00 Settled'}
+            </div>
           </div>
         </div>
 
-        <div class="section-title">Roommate Settlement Status</div>
-        <table style="margin-bottom: 25px;">
+        <!-- 1. MEMBER BALANCE OVERVIEW -->
+        <div class="section-header">
+          <h2 class="section-title">1. MEMBER BALANCE OVERVIEW</h2>
+          <span class="section-subtitle">Summary of payments vs assigned shares</span>
+        </div>
+        <table class="data-table">
           <thead>
             <tr>
-              <th>Member</th>
-              <th style="text-align: right;">Total Paid</th>
-              <th style="text-align: right;">Share Amount</th>
-              <th style="text-align: right;">Pay</th>
-              <th style="text-align: right;">Receive</th>
-              <th style="text-align: right;">Status</th>
+              <th style="width: 26%;">Member Name</th>
+              <th style="width: 19%;" class="text-right">Total Paid (INR)</th>
+              <th style="width: 19%;" class="text-right">Assigned Share (INR)</th>
+              <th style="width: 24%;">Net Status</th>
+              <th style="width: 12%;" class="text-right">% Spend</th>
             </tr>
           </thead>
           <tbody>
       `;
 
-      const otherTotal = filtered.filter(tx => tx.id !== 'virtual-rent').reduce((s, tx) => s + Number(tx.amount), 0);
-      const otherShare = otherTotal / count;
-      const rentShare = shouldInjectRent && period !== 'today' ? (activeRentAmount / count) : 0;
-      const totalShare = otherShare + rentShare;
-
-      allNames.forEach(name => {
-        const paid = totalPaidMap[name] || 0;
-        const bal = paid - otherShare; // Settlement balance (excluding rent)
-        const pays = bal < 0 ? Math.round(-bal) : 0;
-        const recvs = bal > 0 ? Math.round(bal) : 0;
-        
-        let badgeClass = 'badge-settled';
-        let statusText = 'Settled';
-        if (bal > 0.99) {
-          badgeClass = 'badge-recv';
-          statusText = 'Receive';
-        } else if (bal < -0.99) {
-          badgeClass = 'badge-pay';
-          statusText = 'Pay';
+      memberSummaries.forEach(m => {
+        let statusHtml = '';
+        if (m.bal > 0.01) {
+          statusHtml = `<span class="status-gets-back">Gets Back INR ${m.bal.toFixed(2)}</span>`;
+        } else if (m.bal < -0.01) {
+          statusHtml = `<span class="status-owes">Owes INR ${Math.abs(m.bal).toFixed(2)}</span>`;
+        } else {
+          statusHtml = `<span class="status-settled">Settled INR 0.00</span>`;
         }
 
         html += `
           <tr>
-            <td><strong>${name}</strong> ${name === currentUser?.name ? '(You)' : ''}</td>
-            <td class="text-right mono">₹${Math.round(paid).toLocaleString('en-IN')}</td>
-            <td class="text-right mono">₹${Math.round(totalShare).toLocaleString('en-IN')}</td>
-            <td class="text-right mono text-red-700">${pays > 0 ? `₹${pays.toLocaleString('en-IN')}` : '-'}</td>
-            <td class="text-right mono text-emerald-800">${recvs > 0 ? `₹${recvs.toLocaleString('en-IN')}` : '-'}</td>
-            <td class="text-right"><span class="badge ${badgeClass}">${statusText}</span></td>
+            <td><strong>${m.name}</strong> ${m.name === currentUser?.name ? '<span style="color: #64748B; font-weight: normal; font-size: 8pt;">(You)</span>' : ''}</td>
+            <td class="text-right mono">INR ${m.paid.toFixed(2)}</td>
+            <td class="text-right mono">INR ${m.share.toFixed(2)}</td>
+            <td>${statusHtml}</td>
+            <td class="text-right mono">${m.pctSpend.toFixed(1)}%</td>
           </tr>
         `;
       });
@@ -3909,13 +4506,80 @@ export default function PersonalLedger() {
           </tbody>
         </table>
 
-        <div class="section-title">Calculated Settlements Needed</div>
-        <table style="margin-bottom: 30px;">
+        <!-- 2. DETAILED MEMBER PAYMENT & EXPENSE ANALYSIS -->
+        <div class="section-header">
+          <h2 class="section-title">2. DETAILED MEMBER PAYMENT & EXPENSE ANALYSIS</h2>
+          <span class="section-subtitle">Detailed breakdown of what each person paid</span>
+        </div>
+        <div class="section-desc">Comprehensive audit of upfront funding and individual expenses paid by each room member.</div>
+      `;
+
+      // Render a breakdown card for each member
+      memberSummaries.forEach(m => {
+        let netPosHtml = '';
+        if (m.bal > 0.01) {
+          netPosHtml = `<span class="status-gets-back">Net Position: Gets Back INR ${m.bal.toFixed(2)}</span>`;
+        } else if (m.bal < -0.01) {
+          netPosHtml = `<span class="status-owes">Net Position: Owes INR ${Math.abs(m.bal).toFixed(2)}</span>`;
+        } else {
+          netPosHtml = `<span class="status-settled">Net Position: Settled INR 0.00</span>`;
+        }
+
+        html += `
+          <div class="member-card">
+            <div class="member-card-bar">
+              <div class="member-card-title">
+                ${m.name.toUpperCase()} <span class="member-card-spent-pct">(${m.pctSpend.toFixed(1)}% of total room spending)</span>
+              </div>
+              <div class="member-card-paid">Total Paid: INR ${m.paid.toFixed(2)}</div>
+            </div>
+            <div class="member-card-subbar">
+              <div>Assigned Share: INR ${m.share.toFixed(2)}</div>
+              <div>${netPosHtml}</div>
+            </div>
+            <div class="member-items-wrap">
+              <div class="member-items-header">Expenses Paid by ${m.name} (${m.txs.length} items):</div>
+        `;
+
+        if (m.txs.length === 0) {
+          html += `
+            <div style="font-size: 7.5pt; color: #94A3B8; font-style: italic; padding: 2px 10px;">
+              • No upfront expenses paid by this member in this period.
+            </div>
+          `;
+        } else {
+          m.txs.forEach(tx => {
+            const desc = tx.note ? (tx.merchant ? `${tx.merchant}: ${tx.note}` : tx.note) : (tx.merchant || 'Expense');
+            html += `
+              <div class="member-item-row">
+                <div class="member-item-left">
+                  <span class="member-item-bullet">-</span> ${formatPDFDate(tx.date)}: ${desc}
+                </div>
+                <div class="member-item-amt">INR ${Number(tx.amount).toFixed(2)}</div>
+              </div>
+            `;
+          });
+        }
+
+        html += `
+            </div>
+          </div>
+        `;
+      });
+
+      // 3. RECOMMENDED SETTLEMENT TRANSFERS
+      html += `
+        <div class="section-header">
+          <h2 class="section-title">3. RECOMMENDED SETTLEMENT TRANSFERS</h2>
+          <span class="section-subtitle">Minimal payments to clear all group dues</span>
+        </div>
+        <table class="data-table">
           <thead>
             <tr>
-              <th>From (Debtor)</th>
-              <th>To (Creditor)</th>
-              <th style="text-align: right;">Settlement Amount</th>
+              <th style="width: 24%;">From (Debtor)</th>
+              <th style="width: 24%;">To (Creditor)</th>
+              <th style="width: 18%;" class="text-right">Amount (INR)</th>
+              <th style="width: 34%;">Payment Instruction</th>
             </tr>
           </thead>
           <tbody>
@@ -3924,16 +4588,19 @@ export default function PersonalLedger() {
       if (periodDuesList.length === 0) {
         html += `
           <tr>
-            <td colspan="3" style="text-align: center; color: #6B7280; font-style: italic;">Everyone is squared up! No settlements needed for this period.</td>
+            <td colspan="4" class="text-center" style="color: #047857; font-weight: 600; padding: 12px;">
+              ✅ All members are squared up! No settlement transfers required.
+            </td>
           </tr>
         `;
       } else {
         periodDuesList.forEach(due => {
           html += `
             <tr>
-              <td><span style="color: #B91C1C; font-weight: 600;">${due.from}</span></td>
-              <td><span style="color: #047857; font-weight: 600;">${due.to}</span></td>
-              <td class="text-right mono font-bold">₹${due.amount.toLocaleString('en-IN')}</td>
+              <td style="color: #B91C1C; font-weight: 700;">${due.from}</td>
+              <td style="color: #047857; font-weight: 700;">${due.to}</td>
+              <td class="text-right mono font-bold">INR ${due.amount.toFixed(2)}</td>
+              <td style="color: #334155; font-weight: 500;">${due.instruction}</td>
             </tr>
           `;
         });
@@ -3943,32 +4610,36 @@ export default function PersonalLedger() {
           </tbody>
         </table>
 
-        <div class="section-title">Flat Shared Expenses Ledger</div>
-        <table>
+        <!-- 4. DETAILED EXPENSE LEDGER -->
+        <div class="section-header">
+          <h2 class="section-title">4. DETAILED EXPENSE LEDGER</h2>
+          <span class="section-subtitle">Full log of expenses with involved members</span>
+        </div>
+        <table class="data-table">
           <thead>
             <tr>
-              <th style="width: 12%;">Date</th>
-              <th style="width: 12%;">Day</th>
-              <th style="width: 18%;">Buyer Name</th>
-              <th style="width: 18%;">Category</th>
-              <th style="width: 25%;">Item Purchased (Merchant/Notes)</th>
-              <th style="width: 15%; text-align: right;">Amount</th>
+              <th style="width: 13%;">Date</th>
+              <th style="width: 31%;">Description</th>
+              <th style="width: 16%;">Paid By</th>
+              <th style="width: 25%;">Involved Members</th>
+              <th style="width: 15%;" class="text-right">Amount (INR)</th>
             </tr>
           </thead>
           <tbody>
       `;
 
       filtered.forEach(t => {
-        const dayName = new Date(t.date).toLocaleDateString('en-IN', { weekday: 'long' });
-        const desc = t.note ? `${t.merchant} (${t.note})` : t.merchant;
+        const payer = resolvePayerName(t, memberNames, roommates, currentUser, roomAdminId);
+        const included = getIncludedMembersForTx(t, memberNames, roommates, currentUser);
+        const involvedStr = included.length > 0 ? included.join(', ') : 'All Members';
+        const desc = t.note ? (t.merchant ? `${t.merchant}: ${t.note}` : t.note) : (t.merchant || 'Expense');
         html += `
           <tr>
-            <td class="mono">${t.date}</td>
-            <td>${dayName}</td>
-            <td><strong>${t.logged_by}</strong></td>
-            <td>${t.category}</td>
+            <td class="mono">${formatPDFDate(t.date)}</td>
             <td>${desc}</td>
-            <td class="text-right mono font-bold">₹${Number(t.amount).toLocaleString('en-IN')}</td>
+            <td><strong>${payer}</strong></td>
+            <td style="color: #475569; font-size: 8pt;">${involvedStr}</td>
+            <td class="text-right mono font-bold">INR ${Number(t.amount).toFixed(2)}</td>
           </tr>
         `;
       });
@@ -3979,16 +4650,17 @@ export default function PersonalLedger() {
       `;
     }
 
-    // End HTML
+    // End HTML & Footer
     html += `
-        <div class="footer">
-          SmartSave App &bull; Bachelor & Roommate Expense Management System &bull; &copy; ${today.getFullYear()}
+        <div class="doc-footer">
+          <span>Room Expense Statement - ${roomTitle}</span>
+          <span>FinSense Financial Engine &bull; Automated Expense Statement</span>
         </div>
         <script>
           window.onload = function() {
             setTimeout(function() {
               window.print();
-            }, 500);
+            }, 400);
           }
         </script>
       </body>
@@ -3997,7 +4669,7 @@ export default function PersonalLedger() {
 
     printWindow.document.write(html);
     printWindow.document.close();
-    showToast('success', `PDF Report generated for ${period}`);
+    showToast('success', `PDF Report generated for ${displayPeriodName}`);
   };
 
   const [exportMenuOpen, setExportMenuOpen] = React.useState(false);
@@ -4099,7 +4771,7 @@ export default function PersonalLedger() {
   };
 
   // --- Auth Screen Overlay ---
-  if (!session) {
+  if (!session || isPasswordRecovery) {
     return (
       <div className="ledger-app min-h-screen flex items-center justify-center p-4 transition-all duration-300" style={rootStyles}>
         <style>{`
@@ -4149,69 +4821,230 @@ export default function PersonalLedger() {
         <div className="auth-card max-w-sm w-full rounded-lg p-6 space-y-6">
           <div className="text-center space-y-1">
             <h1 className="text-xl font-bold text-[var(--ink)]">FinSense AI</h1>
-            <p className="text-[10px] uppercase tracking-wider text-[var(--ink-soft)] font-bold">Collaborative Roommate Ledger</p>
+            <p className="text-[10px] uppercase tracking-wider text-[var(--ink-soft)] font-bold">
+              {isPasswordRecovery
+                ? "Set New Password"
+                : isForgotPassword
+                ? "Password Recovery"
+                : "Collaborative Roommate Ledger"}
+            </p>
           </div>
 
-          <form onSubmit={handleAuthSubmit} className="space-y-4">
-            {isRegistering && (
+          {/* MODE 1: PASSWORD RECOVERY (User clicked email recovery link) */}
+          {isPasswordRecovery ? (
+            <form onSubmit={handleUpdatePassword} className="space-y-4">
+              <p className="text-xs text-slate-600 text-center leading-relaxed">
+                Enter your new password below to regain access to your account.
+              </p>
+
               <div className="flex flex-col">
-                <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Your Full Name</label>
+                <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">New Password</label>
                 <input
-                  type="text"
-                  placeholder="e.g. Siva"
+                  type="password"
+                  placeholder="At least 6 characters"
                   className="ledger-input-box"
-                  value={authName}
-                  onChange={e => setAuthName(e.target.value)}
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  minLength={6}
                   required
                 />
               </div>
-            )}
 
-            <div className="flex flex-col">
-              <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Email Address</label>
-              <input
-                type="email"
-                placeholder="siva@bachelor.com"
-                className="ledger-input-box"
-                value={authEmail}
-                onChange={e => setAuthEmail(e.target.value)}
-                required
-              />
+              <div className="flex flex-col">
+                <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Confirm New Password</label>
+                <input
+                  type="password"
+                  placeholder="Re-type new password"
+                  className="ledger-input-box"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  minLength={6}
+                  required
+                />
+              </div>
+
+              {errorMsg && (
+                <p className="text-xs text-[var(--stamp)] font-bold text-center">{errorMsg}</p>
+              )}
+
+              <button type="submit" className="btn-vintage-ink flex items-center justify-center gap-1.5" disabled={authLoading}>
+                {authLoading ? "Updating..." : "Update Password & Sign In"}
+              </button>
+
+              <div className="text-center pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPasswordRecovery(false);
+                    setIsForgotPassword(false);
+                    setErrorMsg(null);
+                  }}
+                  className="text-xs underline font-bold"
+                  style={{ color: 'var(--ink)' }}
+                >
+                  ← Back to Sign In
+                </button>
+              </div>
+            </form>
+          ) : isForgotPassword ? (
+            /* MODE 2: FORGOT PASSWORD FORM */
+            <div className="space-y-4">
+              {resetSent ? (
+                <div className="space-y-4 text-center">
+                  <div className="p-4 bg-emerald-50 rounded-lg border border-emerald-200 text-xs text-emerald-800 space-y-2">
+                    <div className="text-2xl">📬</div>
+                    <div className="font-bold text-sm">Check your inbox</div>
+                    <p className="text-slate-600 leading-relaxed">
+                      We've sent a password reset link to <strong className="text-slate-900">{authEmail}</strong>. Please check your inbox (and spam folder) and click the link to reset your password.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsForgotPassword(false);
+                      setResetSent(false);
+                      setErrorMsg(null);
+                    }}
+                    className="btn-vintage-ink flex items-center justify-center gap-1.5"
+                  >
+                    ← Back to Sign In
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    disabled={authLoading}
+                    className="text-xs underline font-bold block mx-auto text-slate-500 hover:text-[var(--ink)] cursor-pointer"
+                  >
+                    {authLoading ? "Resending..." : "Didn't receive email? Click to resend"}
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPassword} className="space-y-4">
+                  <p className="text-xs text-slate-600 text-center leading-relaxed">
+                    Forgot your password? Enter your registered email address and we will send you instructions to reset it.
+                  </p>
+
+                  <div className="flex flex-col">
+                    <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Registered Email Address</label>
+                    <input
+                      type="email"
+                      placeholder="e.g. sriramjack045@gmail.com"
+                      className="ledger-input-box"
+                      value={authEmail}
+                      onChange={e => setAuthEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+
+                  {errorMsg && (
+                    <p className="text-xs text-[var(--stamp)] font-bold text-center">{errorMsg}</p>
+                  )}
+
+                  <button type="submit" className="btn-vintage-ink flex items-center justify-center gap-1.5" disabled={authLoading}>
+                    {authLoading ? "Sending Link..." : "Send Password Reset Link"}
+                  </button>
+
+                  <div className="text-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsForgotPassword(false);
+                        setErrorMsg(null);
+                      }}
+                      className="text-xs underline font-bold"
+                      style={{ color: 'var(--ink)' }}
+                    >
+                      ← Back to Sign In
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
+          ) : (
+            /* MODE 3: NORMAL SIGN IN / SIGN UP */
+            <>
+              <form onSubmit={handleAuthSubmit} className="space-y-4">
+                {isRegistering && (
+                  <div className="flex flex-col">
+                    <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Your Full Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Siva"
+                      className="ledger-input-box"
+                      value={authName}
+                      onChange={e => setAuthName(e.target.value)}
+                      required
+                    />
+                  </div>
+                )}
 
-            <div className="flex flex-col">
-              <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Password</label>
-              <input
-                type="password"
-                placeholder="••••••••"
-                className="ledger-input-box"
-                value={authPassword}
-                onChange={e => setAuthPassword(e.target.value)}
-                required
-              />
-            </div>
+                <div className="flex flex-col">
+                  <label className="text-[10px] uppercase font-bold tracking-wider mb-1 text-slate-500">Email Address</label>
+                  <input
+                    type="email"
+                    placeholder="siva@bachelor.com"
+                    className="ledger-input-box"
+                    value={authEmail}
+                    onChange={e => setAuthEmail(e.target.value)}
+                    required
+                  />
+                </div>
 
-            {errorMsg && (
-              <p className="text-xs text-[var(--stamp)] font-bold text-center">{errorMsg}</p>
-            )}
+                <div className="flex flex-col">
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500">Password</label>
+                    {!isRegistering && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(true);
+                          setIsRegistering(false);
+                          setErrorMsg(null);
+                          setResetSent(false);
+                        }}
+                        className="text-[10px] font-bold text-slate-500 hover:text-[var(--ink)] hover:underline cursor-pointer"
+                      >
+                        Forgot Password?
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    className="ledger-input-box"
+                    value={authPassword}
+                    onChange={e => setAuthPassword(e.target.value)}
+                    required
+                  />
+                </div>
 
-            <button type="submit" className="btn-vintage-ink flex items-center justify-center gap-1.5" disabled={authLoading}>
-              {authLoading ? "Processing..." : isRegistering ? "Create Account" : "Sign In"}
-            </button>
-          </form>
+                {errorMsg && (
+                  <p className="text-xs text-[var(--stamp)] font-bold text-center">{errorMsg}</p>
+                )}
 
-          <div className="text-center">
-            <button
-              onClick={() => {
-                setIsRegistering(!isRegistering);
-                setErrorMsg(null);
-              }}
-              className="text-xs underline font-bold"
-              style={{ color: 'var(--ink)' }}
-            >
-              {isRegistering ? "Already have an account? Sign In" : "Need an account? Sign Up"}
-            </button>
-          </div>
+                <button type="submit" className="btn-vintage-ink flex items-center justify-center gap-1.5" disabled={authLoading}>
+                  {authLoading ? "Processing..." : isRegistering ? "Create Account" : "Sign In"}
+                </button>
+              </form>
+
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRegistering(!isRegistering);
+                    setIsForgotPassword(false);
+                    setErrorMsg(null);
+                  }}
+                  className="text-xs underline font-bold"
+                  style={{ color: 'var(--ink)' }}
+                >
+                  {isRegistering ? "Already have an account? Sign In" : "Need an account? Sign Up"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -6346,7 +7179,320 @@ export default function PersonalLedger() {
           {/* ============================================================== */}
 
           {activeTab === 'goals' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="space-y-6">
+              
+              {/* Period-Wise Expense & Dues Audit Section */}
+              <div className="blur-card rounded-xl p-5 border shadow-sm space-y-4" style={{ borderColor: 'var(--rule)' }}>
+                {/* Header with Title and Export Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4" style={{ borderColor: 'var(--rule)' }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">📅</span>
+                      <h3 className="font-bold text-sm tracking-wide text-slate-900 uppercase">
+                        Period-Wise Expense & Dues Audit
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        Custom Range Filter
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Pick any date range (e.g. Sep 3 to Oct 5) to audit shared expenses, calculate exact roommate shares, and export reports.
+                    </p>
+                  </div>
+
+                  {/* Export Buttons */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => exportToPDFCustom({ startDate: customAuditStart, endDate: customAuditEnd, label: `Audit_${customAuditStart}_to_${customAuditEnd}` })}
+                      className="px-3.5 py-2 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                      title="Export formatted PDF report for this period"
+                    >
+                      <Icons.PDF className="w-4 h-4" />
+                      <span>Export Period PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportToExcelCustom({ startDate: customAuditStart, endDate: customAuditEnd, label: `Audit_${customAuditStart}_to_${customAuditEnd}` })}
+                      className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                      title="Export Excel spreadsheet (.xlsx) for this period"
+                    >
+                      <Icons.Excel className="w-4 h-4" />
+                      <span>Export Period Excel</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter Controls Row: Date Inputs + Quick Presets */}
+                <div className="bg-slate-50/80 p-3.5 rounded-xl border space-y-3" style={{ borderColor: 'var(--rule)' }}>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                    <div className="flex items-center gap-2 flex-1">
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex-shrink-0">
+                        From:
+                      </label>
+                      <input
+                        type="date"
+                        value={customAuditStart}
+                        onChange={(e) => setCustomAuditStart(e.target.value)}
+                        className="w-full bg-white border rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-mono outline-none shadow-2xs focus:ring-1 focus:ring-slate-400"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1">
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex-shrink-0">
+                        To:
+                      </label>
+                      <input
+                        type="date"
+                        value={customAuditEnd}
+                        onChange={(e) => setCustomAuditEnd(e.target.value)}
+                        className="w-full bg-white border rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-mono outline-none shadow-2xs focus:ring-1 focus:ring-slate-400"
+                        style={{ borderColor: 'var(--rule)' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Preset Pills */}
+                  <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-200/60">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 mr-1">Presets:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAuditPreset('sep3_oct5')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition border cursor-pointer ${
+                        customAuditStart === '2026-09-03' && customAuditEnd === '2026-10-05'
+                          ? 'bg-[var(--ink)] text-white border-[var(--ink)] shadow-2xs'
+                          : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300'
+                      }`}
+                    >
+                      ⭐ Sep 3 – Oct 5
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAuditPreset('this_month')}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 transition cursor-pointer"
+                    >
+                      This Month
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAuditPreset('last_month')}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 transition cursor-pointer"
+                    >
+                      Last Month
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAuditPreset('last_30_days')}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 transition cursor-pointer"
+                    >
+                      Last 30 Days
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAuditPreset('all_time')}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-white text-slate-700 hover:bg-slate-100 border border-slate-300 transition cursor-pointer"
+                    >
+                      All Time
+                    </button>
+                  </div>
+                </div>
+
+                {/* Period Summary KPI Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 bg-white rounded-xl border shadow-2xs" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Period Total Expense</div>
+                    <div className="text-lg font-bold font-mono text-slate-900 mt-0.5">
+                      {fmt(customPeriodAudit.totalExpense)}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border shadow-2xs" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Transactions Count</div>
+                    <div className="text-lg font-bold font-mono text-slate-900 mt-0.5">
+                      {customPeriodAudit.txCount} txs
+                    </div>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border shadow-2xs" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Roommates Audited</div>
+                    <div className="text-lg font-bold font-mono text-slate-900 mt-0.5">
+                      {roommates.length + 1} members
+                    </div>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border shadow-2xs" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Settlements Needed</div>
+                    <div className="text-lg font-bold font-mono text-slate-900 mt-0.5">
+                      {customPeriodAudit.duesList.length} transfers
+                    </div>
+                  </div>
+                </div>
+
+                {/* Member Breakdown & Balances for this period */}
+                {analysisType === 'roommates' ? (
+                  <div className="space-y-3">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center justify-between">
+                      <span>Roommate Balances for Period ({customAuditStart} to {customAuditEnd})</span>
+                      <span className="text-[10px] text-slate-400 font-normal lowercase">calculated from transactions within this date window</span>
+                    </div>
+
+                    <div className="overflow-x-auto border rounded-xl bg-white" style={{ borderColor: 'var(--rule)' }}>
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 text-[10px] uppercase font-bold text-slate-500 border-b" style={{ borderColor: 'var(--rule)' }}>
+                          <tr>
+                            <th className="px-3.5 py-2.5">Member</th>
+                            <th className="px-3.5 py-2.5 text-right">Total Paid</th>
+                            <th className="px-3.5 py-2.5 text-right">Fair Share</th>
+                            <th className="px-3.5 py-2.5 text-right">Net Balance</th>
+                            <th className="px-3.5 py-2.5 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {customPeriodAudit.memberSummaries.map((m, idx) => {
+                            const isUser = m.name === currentUser?.name;
+                            return (
+                              <tr key={idx} className="hover:bg-slate-50/70 transition">
+                                <td className="px-3.5 py-2.5 font-bold text-slate-800 flex items-center gap-1.5">
+                                  <span>{m.name}</span>
+                                  {isUser && <span className="text-[10px] text-slate-400 font-normal">(You)</span>}
+                                </td>
+                                <td className="px-3.5 py-2.5 text-right font-mono font-medium text-slate-800">
+                                  {fmt(m.paid)}
+                                </td>
+                                <td className="px-3.5 py-2.5 text-right font-mono font-medium text-slate-600">
+                                  {fmt(m.share)}
+                                </td>
+                                <td className="px-3.5 py-2.5 text-right font-mono font-bold">
+                                  {m.balance > 0 ? (
+                                    <span className="text-emerald-700">+{fmt(m.balance)}</span>
+                                  ) : m.balance < 0 ? (
+                                    <span className="text-red-700">-{fmt(Math.abs(m.balance))}</span>
+                                  ) : (
+                                    <span className="text-slate-400">₹0</span>
+                                  )}
+                                </td>
+                                <td className="px-3.5 py-2.5 text-center">
+                                  <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    m.status === 'Owed'
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                      : m.status === 'Owes'
+                                      ? 'bg-red-100 text-red-800 border border-red-200'
+                                      : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                  }`}>
+                                    {m.status === 'Owed' ? 'To Receive' : m.status === 'Owes' ? 'Owes' : 'Settled'}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Period Calculated Settlements */}
+                    <div className="pt-2">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 mb-2">
+                        Suggested Settlements for this Period:
+                      </div>
+                      {customPeriodAudit.duesList.length === 0 ? (
+                        <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-medium text-center">
+                          ✅ Perfect balance! Nobody owes anybody for this period.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {customPeriodAudit.duesList.map((due, idx) => (
+                            <div key={idx} className="flex items-center justify-between p-2.5 bg-white rounded-lg border text-xs" style={{ borderColor: 'var(--rule)' }}>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="font-bold text-red-700 truncate">{due.from}</span>
+                                <span className="text-slate-400 text-[10px]">owes</span>
+                                <span className="font-bold text-emerald-800 truncate">{due.to}</span>
+                              </div>
+                              <span className="font-bold font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-900 text-xs">
+                                {fmt(due.amount)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* Personal Mode category summary for period */
+                  <div className="space-y-3">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Personal Spending by Category ({customAuditStart} to {customAuditEnd})
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {Object.entries(customPeriodAudit.categoryBreakdown).map(([cat, amt]) => {
+                        const pct = customPeriodAudit.totalExpense > 0 ? Math.round((amt / customPeriodAudit.totalExpense) * 100) : 0;
+                        return (
+                          <div key={cat} className="p-2.5 bg-white rounded-lg border text-xs" style={{ borderColor: 'var(--rule)' }}>
+                            <div className="flex justify-between items-center text-slate-600 font-medium">
+                              <span>{cat}</span>
+                              <span className="font-mono text-[10px] text-slate-400">{pct}%</span>
+                            </div>
+                            <div className="text-sm font-bold font-mono text-slate-900 mt-1">{fmt(amt)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Collapsible Transactions Drawer */}
+                <div className="pt-2 border-t" style={{ borderColor: 'var(--rule)' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowPeriodTxList(!showPeriodTxList)}
+                    className="w-full flex items-center justify-between p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100/80 border text-xs font-bold transition text-slate-700 cursor-pointer"
+                    style={{ borderColor: 'var(--rule)' }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>🧾</span>
+                      <span>
+                        Transactions in this Period ({customPeriodAudit.filteredTxs.length})
+                      </span>
+                    </div>
+                    <span className="text-slate-400 font-bold transition-transform duration-200" style={{ transform: showPeriodTxList ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                      ▼
+                    </span>
+                  </button>
+
+                  {showPeriodTxList && (
+                    <div className="mt-2.5 max-h-72 overflow-y-auto border rounded-xl bg-white divide-y divide-slate-100" style={{ borderColor: 'var(--rule)' }}>
+                      {customPeriodAudit.filteredTxs.length === 0 ? (
+                        <div className="p-4 text-center text-xs text-slate-400">
+                          No transactions found between {customAuditStart} and {customAuditEnd}.
+                        </div>
+                      ) : (
+                        customPeriodAudit.filteredTxs.map(t => {
+                          const payer = resolvePayerName(t, [currentUser?.name, ...roommates.map(r => r.name)].filter(Boolean), roommates, currentUser, roomAdminId);
+                          return (
+                            <div key={t.id} className="p-2.5 flex items-center justify-between text-xs hover:bg-slate-50/80 transition">
+                              <div className="min-w-0 pr-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-[10px] text-slate-400">{t.date}</span>
+                                  <span className="font-bold text-slate-800 truncate">{t.merchant}</span>
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-medium">{t.category}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                                  Paid by: <span className="font-semibold text-slate-700">{payer}</span>
+                                  {t.note && <span className="ml-1 text-slate-400">&bull; {t.note}</span>}
+                                </div>
+                              </div>
+                              <div className="font-bold font-mono text-slate-900 flex-shrink-0">
+                                {fmt(t.amount)}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* Roommate Management & Personal Goals Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* Roommate Management & Dues */}
               <div className="blur-card rounded p-5 lg:col-span-2 space-y-6">
@@ -6725,7 +7871,8 @@ export default function PersonalLedger() {
               </div>
 
             </div>
-          )}
+          </div>
+        )}
 
           {/* ============================================================== */}
           {/* TAB 5: AI COACH & FORECASTING */}
@@ -7767,6 +8914,64 @@ export default function PersonalLedger() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* ── Security & Password (In-App Change Password) ── */}
+              <div className="space-y-2 border-t pt-2" style={{ borderColor: 'var(--rule)' }}>
+                <div className="flex justify-between items-center">
+                  <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">
+                    🔒 Security & Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowChangePassword(!showChangePassword);
+                      setNewPassword('');
+                      setConfirmPassword('');
+                      setErrorMsg(null);
+                    }}
+                    className="text-[10px] font-bold text-slate-600 hover:text-[var(--ink)] underline cursor-pointer"
+                  >
+                    {showChangePassword ? "Cancel" : "Change Password"}
+                  </button>
+                </div>
+
+                {showChangePassword && (
+                  <div className="space-y-2.5 p-3 rounded-lg bg-slate-50 border" style={{ borderColor: 'var(--rule)' }}>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">
+                        New Password
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="At least 6 characters"
+                        value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)}
+                        className="ledger-input-box text-xs py-1.5"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] uppercase font-bold tracking-wider text-slate-500 block">
+                        Confirm New Password
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="Re-enter new password"
+                        value={confirmPassword}
+                        onChange={e => setConfirmPassword(e.target.value)}
+                        className="ledger-input-box text-xs py-1.5"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleUpdatePassword}
+                      disabled={authLoading}
+                      className="w-full py-2 bg-[var(--ink)] text-[var(--card)] rounded text-xs font-bold hover:opacity-90 transition disabled:opacity-50"
+                    >
+                      {authLoading ? "Updating..." : "Update Password"}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {profileSaveLoading ? (
